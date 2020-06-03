@@ -47,7 +47,7 @@ impl Ending {
                 if &next.end > cover_end {
                     // tree must be collapsing; we cant have root be some smaller *file* range than
                     // the child
-                    Err(FileError::TreeExpandsOnLinks.into())
+                    Err(FileError::TreeExpandsOnLinks)?
                 } else {
                     Ok(())
                 }
@@ -56,7 +56,7 @@ impl Ending {
                 if &next.start <= cover_end {
                     // when moving to sibling at the same high or above, it's coverage must start
                     // from where we stopped
-                    Err(FileError::TreeOverlapsBetweenLinks.into())
+                    Err(FileError::TreeOverlapsBetweenLinks)?
                 } else {
                     Ok(())
                 }
@@ -65,7 +65,7 @@ impl Ending {
                 if &next.start != chunk_end {
                     // when continuing on from leaf node to either tree at above or a chunk at
                     // next, the next must continue where we stopped
-                    Err(FileError::TreeJumpsBetweenLinks.into())
+                    Err(FileError::TreeJumpsBetweenLinks)?
                 } else {
                     Ok(())
                 }
@@ -114,9 +114,9 @@ impl<'a> FileReader<'a> {
         if inner.data.Type != UnixFsType::File && inner.data.Type != UnixFsType::Raw {
             Err(FileReadFailed::UnexpectedType(inner.data.Type.into()))
         } else if inner.links.len() != inner.data.blocksizes.len() {
-            Err(FileReadFailed::File(FileError::LinksAndBlocksizesMismatch))
+            Err(FileError::LinksAndBlocksizesMismatch)?
         } else if empty_or_no_content && !is_zero_bytes && inner.links.is_empty() {
-            Err(FileReadFailed::File(FileError::NoLinksNoContent))
+            Err(FileError::NoLinksNoContent)?
         } else {
             // raw and file seem to be same except the raw is preferred in trickle dag
             let data = inner.data.Data.unwrap_borrowed_or_empty();
