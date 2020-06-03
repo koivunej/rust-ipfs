@@ -255,3 +255,47 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Ending;
+    use crate::file::{FileError, FileReadFailed};
+
+    #[test]
+    fn collapsing_tree() {
+        // this is pretty much how I planned the ending might be useful but it's perhaps a bit
+        // confusing as it's only the half of the range
+        Ending::TreeCoverage(100).check_is_suitable_next(&(0..100)).unwrap();
+        Ending::TreeCoverage(100).check_is_suitable_next(&(0..10)).unwrap();
+        Ending::TreeCoverage(100).check_is_suitable_next(&(0..2)).unwrap();
+        Ending::Chunk(2).check_is_suitable_next(&(2..10)).unwrap();
+        Ending::TreeCoverage(10).check_is_suitable_next(&(2..10)).unwrap();
+        Ending::Chunk(10).check_is_suitable_next(&(10..100)).unwrap();
+    }
+
+    #[test]
+    fn expanding_tree() {
+        match Ending::TreeCoverage(100).check_is_suitable_next(&(0..101)) {
+            Err(FileReadFailed::File(FileError::TreeExpandsOnLinks)) => {},
+            x => panic!("unexpected {:?}", x),
+        }
+    }
+
+    #[test]
+    fn overlap() {
+        // it's not possible to continue from coverage to sibling but it's possible to go chunk to
+        // larger sibling ... but this isn't really an overlap issue.
+        match Ending::TreeCoverage(100).check_is_suitable_next(&(100..102)) {
+            Err(FileReadFailed::File(FileError::TreeOverlapsBetweenLinks)) => {},
+            x => panic!("unexpected {:?}", x),
+        }
+    }
+
+    #[test]
+    fn hole() {
+        match Ending::Chunk(100).check_is_suitable_next(&(101..105)) {
+            Err(FileReadFailed::File(FileError::TreeJumpsBetweenLinks)) => {},
+            x => panic!("unexpected {:?}", x),
+        }
+    }
+}

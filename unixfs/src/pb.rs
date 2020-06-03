@@ -97,11 +97,14 @@ impl<'a> TryFrom<&'a [u8]> for FlatUnixFs<'a> {
 #[cfg(test)]
 impl<'a> FlatUnixFs<'a> {
     pub fn range_links(&'a self) -> impl Iterator<Item = (PBLink<'a>, Range<u64>)> {
+        assert_eq!(self.links.len(), self.data.blocksizes.len());
+
         let zipped = self
             .links
             .clone()
             .into_iter()
             .zip(self.data.blocksizes.iter().copied());
+
 
         // important: we have validated links.len() == blocksizes.len()
         RangeLinks::from_links_and_blocksizes(zipped, Some(0))
