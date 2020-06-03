@@ -1,4 +1,4 @@
-use crate::pb::{UnixFsReadFailed, UnixFsType};
+use crate::pb::{UnixFsReadFailed, UnixFsType, UnixFs};
 use std::borrow::Cow;
 use std::fmt;
 
@@ -6,7 +6,7 @@ pub mod reader;
 pub mod visit;
 
 /// Container for the unixfs metadata, which can be present at the root of the file trees.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct FileMetadata {
     mode: Option<u32>,
     mtime: Option<(i64, u32)>,
@@ -33,6 +33,18 @@ impl FileMetadata {
     /// the common "unix epoch".
     pub fn mtime(&self) -> Option<(i64, u32)> {
         self.mtime
+    }
+}
+
+impl<'a> From<&'a UnixFs<'_>> for FileMetadata {
+    fn from(data: &'a UnixFs<'_>) -> Self {
+        let mode = data.mode;
+        let mtime = data
+            .mtime
+            .clone()
+            .map(|ut| (ut.Seconds, ut.FractionalNanoseconds.unwrap_or(0)));
+
+        FileMetadata { mode, mtime }
     }
 }
 
@@ -83,6 +95,8 @@ pub enum FileError {
     LinksAndBlocksizesMismatch,
     /// Errored when the filesize is non-zero.
     NoLinksNoContent,
+    /// Unsupported: non-root block defines metadata.
+    NonRootDefinesMetadata(FileMetadata),
     /// A non-leaf node in the tree has no filesize value which is used to determine the file range
     /// for this tree.
     IntermediateNodeWithoutFileSize,
@@ -114,6 +128,11 @@ impl fmt::Display for FileError {
                 fmt,
                 "filesize is non-zero while there are no links or content"
             ),
+            NonRootDefinesMetadata(metadata) => write!(
+                fmt,
+                "unsupported: non-root defines {:?}",
+                metadata
+            ),
             IntermediateNodeWithoutFileSize => {
                 write!(fmt, "intermediatery node with links but no filesize")
             }
@@ -121,11 +140,11 @@ impl fmt::Display for FileError {
                 fmt,
                 "total size of tree expands through links, it should only get smaller or keep size"
             ),
-            TreeOverlapsBetweenLinks => write!(fmt, "not supported: tree contains overlap"),
-            TreeJumpsBetweenLinks => write!(fmt, "not supported: tree contains holes"),
+            TreeOverlapsBetweenLinks => write!(fmt, "unsupported: tree contains overlap"),
+            TreeJumpsBetweenLinks => write!(fmt, "unsupported: tree contains holes"),
             UnexpectedRawOrFileProperties { hash_type, fanout } => write!(
                 fmt,
-                "not supported: File or Raw with hash_type {:?} or fanount {:?}",
+                "unsupported: File or Raw with hash_type {:?} or fanount {:?}",
                 hash_type, fanout
             ),
         }

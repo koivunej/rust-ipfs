@@ -78,16 +78,7 @@ impl<'a> FileReader<'a> {
     /// Method for starting the file traversal. `data` is the raw data from unixfs block.
     pub fn from_block(data: &'a [u8]) -> Result<Self, FileReadFailed> {
         let inner = FlatUnixFs::try_from(data)?;
-
-        let mode = inner.data.mode;
-        let mtime = inner
-            .data
-            .mtime
-            .clone()
-            .map(|ut| (ut.Seconds, ut.FractionalNanoseconds.unwrap_or(0)));
-
-        let metadata = FileMetadata { mode, mtime };
-
+        let metadata = FileMetadata::from(&inner.data);
         Self::from_parts(inner, 0, metadata)
     }
 
@@ -99,12 +90,9 @@ impl<'a> FileReader<'a> {
     ) -> Result<Self, FileReadFailed> {
         let inner = FlatUnixFs::try_from(data)?;
 
-        if inner.data.mode.is_some() {
-            todo!("unknown layout: non-root defines mode?");
-        }
-
-        if inner.data.mtime.is_some() {
-            todo!("unknown layout: non-root defines mtime?");
+        if inner.data.mode.is_some() || inner.data.mtime.is_some() {
+            let metadata = FileMetadata::from(&inner.data);
+            return Err(FileError::NonRootDefinesMetadata(metadata))?;
         }
 
         Self::from_parts(inner, offset, traversal.metadata)
