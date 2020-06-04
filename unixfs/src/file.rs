@@ -6,7 +6,7 @@ pub mod reader;
 pub mod visit;
 
 /// Container for the unixfs metadata, which can be present at the root of the file trees.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct FileMetadata {
     mode: Option<u32>,
     mtime: Option<(i64, u32)>,
@@ -101,7 +101,7 @@ impl From<UnixFsReadFailed> for FileReadFailed {
 }
 
 /// Errors which can happen while processing UnixFS type File or Raw blocks.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum FileError {
     /// There are nonequal number of links and blocksizes and thus the file ranges for linked trees
     /// or blocks cannot be determined.

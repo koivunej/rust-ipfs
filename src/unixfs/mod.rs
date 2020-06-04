@@ -65,7 +65,7 @@ use crate::{Ipfs, IpfsTypes};
 use async_stream::stream;
 use futures::stream::Stream;
 use ipfs_unixfs::file::{
-    visit::{IdleFileVisit, Visitation},
+    visit::IdleFileVisit,
     FileReadFailed,
 };
 use std::fmt;
@@ -95,14 +95,14 @@ pub fn cat(
         };
 
         let mut visit = match visit.start(&data) {
-            Ok((bytes, visit)) => {
+            Ok((bytes, _, visit)) => {
                 if !bytes.is_empty() {
                     yield Ok(bytes.to_vec());
                 }
 
                 match visit {
-                    Visitation::Completed(_) => { return; }
-                    Visitation::Continues(v) => v,
+                    Some(v) => v,
+                    None => return,
                 }
             },
             Err(e) => {
@@ -133,8 +133,8 @@ pub fn cat(
                     }
 
                     match next_visit {
-                        Visitation::Completed(_) => { return; },
-                        Visitation::Continues(v) => visit = v,
+                        Some(v) => visit = v,
+                        None => return,
                     }
                 }
                 Err(e) => {

@@ -7,59 +7,29 @@ use crate::file::reader::{FileContent, FileReader, Traversal};
 use crate::file::{FileMetadata, FileReadFailed, UnwrapBorrowedExt};
 use crate::pb::merkledag::PBLink;
 
-// Long term goal is to be able have more of the visit traits for implementing `ipfs.get`
-// operation or to visit a directories with files, symlinks and nested directories.
-pub trait Visitor {
-    /// Visits the bytes inside of an unixfs file.
-    fn visit_content(&mut self, content: &[u8]);
-
-    /// Called when starting to process a file with it's metadata, which might be empty.
-    fn visit_metadata(&mut self, _metadata: &FileMetadata) {}
-}
-
-pub struct Noop;
-
-impl Visitor for Noop {
-    fn visit_content(&mut self, _: &[u8]) {}
-}
-
 /// IdleFileVisit represents a prepared file visit over a tree. The user has to know the CID and be
 /// able to get the block for the visit.
-pub struct IdleFileVisit<V> {
-    visitor: V,
+#[derive(Default)]
+pub struct IdleFileVisit {
     range: Option<Range<u64>>,
 }
 
-impl Default for IdleFileVisit<Noop> {
-    fn default() -> Self {
-        Self::new(Noop)
-    }
-}
-
-impl<V: Visitor> IdleFileVisit<V> {
-    pub fn new(visitor: V) -> Self {
-        Self {
-            visitor,
-            range: None,
-        }
-    }
-
+impl IdleFileVisit {
     /// Target range represents the target byte range of the file we are interested in visiting.
     pub fn with_target_range(self, range: Range<u64>) -> Self {
         Self {
-            visitor: self.visitor,
             range: Some(range),
         }
     }
 
     /// Begins the visitation by offering the first block to be visited.
     pub fn start<'a>(
-        mut self,
+        self,
         block: &'a [u8],
-    ) -> Result<(&'a [u8], Visitation<V>), FileReadFailed> {
+    ) -> Result<(&'a [u8], FileMetadata, Option<FileVisit>), FileReadFailed> {
         let fr = FileReader::from_block(block)?;
 
-        self.visitor.visit_metadata(fr.as_ref());
+        let metadata = fr.as_ref().to_owned();
 
         let (content, traversal) = fr.content();
 
@@ -71,8 +41,7 @@ impl<V: Visitor> IdleFileVisit<V> {
                 } else {
                     content
                 };
-                self.visitor.visit_content(content);
-                Ok((content, Visitation::Completed(self.visitor)))
+                Ok((content, metadata, None))
             }
             FileContent::Spread(iter) => {
                 // we need to select suitable here
@@ -93,12 +62,12 @@ impl<V: Visitor> IdleFileVisit<V> {
                 pending.reverse();
 
                 if pending.is_empty() {
-                    Ok((&[][..], Visitation::Completed(self.visitor)))
+                    Ok((&[][..], metadata, None))
                 } else {
                     Ok((
                         &[][..],
-                        Visitation::Continues(FileVisit {
-                            visitor: self.visitor,
+                        metadata,
+                        Some(FileVisit {
                             pending,
                             state: traversal,
                             range: self.range,
@@ -174,13 +143,11 @@ fn overlapping_slice<'a>(content: &'a [u8], block: &Range<u64>, target: &Range<u
 ///
 /// The file visitor does **not** implement size validation of merkledag links at the moment. This
 /// could be implmented with generational storage and it would require an u64 per link.
-pub struct FileVisit<V> {
-    visitor: V,
+pub struct FileVisit {
     /// The internal cache for pending work. Order is such that the next is always the last item,
     /// so it can be popped. This currently does use a lot of memory for very large files.
     ///
     /// One workaround would be to transform excess links to relative links to some block of a Cid.
-    // FIXME: use Cid instead of Vec
     pending: Vec<(Cid, Range<u64>)>,
     /// Target range, if any. Used to filter the links so that we will only visit interesting
     /// parts.
@@ -188,7 +155,7 @@ pub struct FileVisit<V> {
     state: Traversal,
 }
 
-impl<V: Visitor> FileVisit<V> {
+impl FileVisit {
     /// Access hashes of all pending links for prefetching purposes. The block for the first item
     /// returned by this iterator is the one which needs to be processed next with `continue_walk`.
     // FIXME: this must change to Cid
@@ -200,7 +167,7 @@ impl<V: Visitor> FileVisit<V> {
     pub fn continue_walk<'a>(
         mut self,
         next: &'a [u8],
-    ) -> Result<(&'a [u8], Visitation<V>), FileReadFailed> {
+    ) -> Result<(&'a [u8], Option<Self>), FileReadFailed> {
         let traversal = self.state;
         let (_, range) = self
             .pending
@@ -221,13 +188,11 @@ impl<V: Visitor> FileVisit<V> {
                     content
                 };
 
-                self.visitor.visit_content(content);
-
                 if !self.pending.is_empty() {
                     self.state = traversal;
-                    Ok((content, Visitation::Continues(self)))
+                    Ok((content, Some(self)))
                 } else {
-                    Ok((content, Visitation::Completed(self.visitor)))
+                    Ok((content, None))
                 }
             }
             FileContent::Spread(iter) => {
@@ -248,34 +213,14 @@ impl<V: Visitor> FileVisit<V> {
                 (&mut self.pending[before..]).reverse();
 
                 self.state = traversal;
-                Ok((&[][..], Visitation::Continues(self)))
+                Ok((&[][..], Some(self)))
             }
         }
     }
 }
 
-/// Visitation represents the state after processing a single block. It becomes completed if there
-/// are no more links to process in order and in that case, the unwrapped visitor is given back.
-// FIXME: get rid of the internal visitation, it can never be adapted to async_stream
-pub enum Visitation<V> {
-    Completed(V),
-    Continues(FileVisit<V>),
-}
-
-impl<V> Visitation<V> {
-    /// Allows expecting the visitation was continued instead of it being completed.
-    pub fn unwrap_continued(self) -> FileVisit<V> {
-        match self {
-            Visitation::Continues(fv) => fv,
-            _ => panic!("unexpected completion of visit"),
-        }
-    }
-
-    /// Allows expecintg the visitation was completed instead of it needing to be continued.
-    pub fn unwrap_completion(self) -> V {
-        match self {
-            Visitation::Completed(v) => v,
-            _ => panic!("unexpected continuation of visit"),
-        }
+impl AsRef<FileMetadata> for FileVisit {
+    fn as_ref(&self) -> &FileMetadata {
+        self.state.as_ref()
     }
 }
