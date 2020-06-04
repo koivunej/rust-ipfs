@@ -17,11 +17,23 @@ pub trait Visitor {
     fn visit_metadata(&mut self, _metadata: &FileMetadata) {}
 }
 
+pub struct Noop;
+
+impl Visitor for Noop {
+    fn visit_content(&mut self, _: &[u8]) {}
+}
+
 /// IdleFileVisit represents a prepared file visit over a tree. The user has to know the CID and be
 /// able to get the block for the visit.
 pub struct IdleFileVisit<V> {
     visitor: V,
     range: Option<Range<u64>>,
+}
+
+impl Default for IdleFileVisit<Noop> {
+    fn default() -> Self {
+        Self::new(Noop)
+    }
 }
 
 impl<V: Visitor> IdleFileVisit<V> {
@@ -41,7 +53,7 @@ impl<V: Visitor> IdleFileVisit<V> {
     }
 
     /// Begins the visitation by offering the first block to be visited.
-    pub fn start(mut self, block: &[u8]) -> Result<Visitation<V>, FileReadFailed> {
+    pub fn start<'a>(mut self, block: &'a [u8]) -> Result<(&'a [u8], Visitation<V>), FileReadFailed> {
         let fr = FileReader::from_block(block)?;
 
         self.visitor.visit_metadata(fr.as_ref());
@@ -57,7 +69,7 @@ impl<V: Visitor> IdleFileVisit<V> {
                     content
                 };
                 self.visitor.visit_content(content);
-                Ok(Visitation::Completed(self.visitor))
+                Ok((content, Visitation::Completed(self.visitor)))
             }
             FileContent::Spread(iter) => {
                 // we need to select suitable here
@@ -78,14 +90,14 @@ impl<V: Visitor> IdleFileVisit<V> {
                 pending.reverse();
 
                 if pending.is_empty() {
-                    Ok(Visitation::Completed(self.visitor))
+                    Ok((&[][..], Visitation::Completed(self.visitor)))
                 } else {
-                    Ok(Visitation::Continues(FileVisit {
+                    Ok((&[][..], Visitation::Continues(FileVisit {
                         visitor: self.visitor,
                         pending,
                         state: traversal,
                         range: self.range,
-                    }))
+                    })))
                 }
             }
         }
@@ -175,7 +187,7 @@ impl<V: Visitor> FileVisit<V> {
     }
 
     /// Continues the walk with the data for the first `pending_link` key.
-    pub fn continue_walk(mut self, next: &[u8]) -> Result<Visitation<V>, FileReadFailed> {
+    pub fn continue_walk<'a>(mut self, next: &'a [u8]) -> Result<(&'a [u8], Visitation<V>), FileReadFailed> {
         let traversal = self.state;
         let (_, range) = self
             .pending
@@ -200,9 +212,9 @@ impl<V: Visitor> FileVisit<V> {
 
                 if !self.pending.is_empty() {
                     self.state = traversal;
-                    Ok(Visitation::Continues(self))
+                    Ok((content, Visitation::Continues(self)))
                 } else {
-                    Ok(Visitation::Completed(self.visitor))
+                    Ok((content, Visitation::Completed(self.visitor)))
                 }
             }
             FileContent::Spread(iter) => {
@@ -223,7 +235,7 @@ impl<V: Visitor> FileVisit<V> {
                 (&mut self.pending[before..]).reverse();
 
                 self.state = traversal;
-                Ok(Visitation::Continues(self))
+                Ok((&[][..], Visitation::Continues(self)))
             }
         }
     }
@@ -231,6 +243,7 @@ impl<V: Visitor> FileVisit<V> {
 
 /// Visitation represents the state after processing a single block. It becomes completed if there
 /// are no more links to process in order and in that case, the unwrapped visitor is given back.
+// FIXME: get rid of the internal visitation, it can never be adapted to async_stream
 pub enum Visitation<V> {
     Completed(V),
     Continues(FileVisit<V>),

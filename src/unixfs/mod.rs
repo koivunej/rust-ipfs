@@ -61,6 +61,102 @@ impl Into<String> for File {
     }
 }
 
+use futures::stream::Stream;
+use std::ops::Range;
+use std::fmt;
+use crate::{Ipfs, IpfsTypes};
+use async_stream::stream;
+use ipfs_unixfs::file::{FileReadFailed, visit::{IdleFileVisit, Visitation}};
+
+fn cat(ipfs: Ipfs<impl IpfsTypes>, cid: Cid, range: Option<Range<u64>>) -> impl Stream<Item = Result<Vec<u8>, TraversalFailed>> + Send + 'static {
+    use bitswap::Block;
+
+    // using async_stream here at least to get on faster; writing custom streams is not too easy
+    // but this might be easy enough to write open.
+    stream! {
+        let mut visit = IdleFileVisit::default();
+        if let Some(range) = range {
+            visit = visit.with_target_range(range);
+        }
+
+        let Block { cid, data } = match ipfs.get_block(&cid).await {
+            Ok(block) => block,
+            Err(e) => {
+                yield Err(TraversalFailed::Loading(cid, e));
+                return;
+            }
+        };
+
+        let mut visit = match visit.start(&data) {
+            Ok((bytes, visit)) => {
+                if !bytes.is_empty() {
+                    yield Ok(bytes.to_vec());
+                }
+
+                match visit {
+                    Visitation::Completed(_) => { return; }
+                    Visitation::Continues(v) => v,
+                }
+            },
+            Err(e) => {
+                yield Err(TraversalFailed::Walking(cid, e));
+                return;
+            }
+        };
+
+        loop {
+            // TODO: if it was possible, it would make sense to start downloading N of these
+            // TODO: it might be reasonable to provide (&Cid, impl Iterator<Item = &Cid>) here and
+            // move the unwrap into the library if this all turns out to be a good idea.
+            let next = visit.pending_links().next()
+                .expect("there must be links, otherwise visitation would had not continued");
+
+            let Block { cid, data } = match ipfs.get_block(&next).await {
+                Ok(block) => block,
+                Err(e) => {
+                    yield Err(TraversalFailed::Loading(next.to_owned(), e));
+                    return;
+                },
+            };
+
+            match visit.continue_walk(&data) {
+                Ok((bytes, next_visit)) => {
+                    if !bytes.is_empty() {
+                        yield Ok(bytes.to_vec());
+                    }
+
+                    match next_visit {
+                        Visitation::Completed(_) => { return; },
+                        Visitation::Continues(v) => visit = v,
+                    }
+                }
+                Err(e) => {
+                    yield Err(TraversalFailed::Walking(cid, e));
+                    return;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+enum TraversalFailed {
+    Loading(Cid, Error),
+    Walking(Cid, FileReadFailed),
+}
+
+impl fmt::Display for TraversalFailed {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use TraversalFailed::*;
+        match self {
+            Loading(cid, e) => write!(fmt, "loading of block {} failed: {}", cid, e),
+            Walking(cid, e) => write!(fmt, "failed to walk {}: {}", cid, e),
+        }
+    }
+}
+
+impl std::error::Error for TraversalFailed {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,5 +172,60 @@ mod tests {
 
         let cid2 = file.put_unixfs_v1(&dag).await.unwrap();
         assert_eq!(cid.to_string(), cid2.to_string());
+    }
+
+    #[async_std::test]
+    async fn cat() {
+        use crate::{IpfsOptions, UninitializedIpfs};
+        use async_std::task;
+        use futures::stream::{Stream, StreamExt};
+        use std::time::{Instant, Duration};
+        use sha2::{Digest, Sha256};
+        use hex_literal::hex;
+
+        let options = IpfsOptions::inmemory_with_generated_keys(false);
+
+        let (ipfs, fut) = UninitializedIpfs::new(options).await.start().await.unwrap();
+        task::spawn(fut);
+
+        let id = ipfs.identity().await.unwrap();
+        println!("listening at: {}/p2p/{}", id.1[0], id.0.into_peer_id());
+        let cid = "QmTEn8ypAkbJXZUXCRHBorwF2jM8uTUW9yRLzrcQouSoD4";
+        println!("please connect an go-ipfs with Cid {}", cid);
+
+        while ipfs.peers().await.unwrap().is_empty() {
+            async_std::future::timeout(Duration::from_millis(100), futures::future::pending::<()>())
+                .await
+                .unwrap_err();
+        }
+
+        println!("got peer");
+        let started_at = Instant::now();
+
+        let stream = super::cat(ipfs, libipld::cid::Cid::try_from(cid).unwrap(), None);
+
+        futures::pin_mut!(stream);
+
+        let mut digest = Sha256::new();
+        let mut count = 0;
+
+        loop {
+            let bytes = match stream.next().await {
+                Some(Ok(bytes)) => bytes,
+                Some(Err(e)) => panic!("got error: {}", e),
+                None => break,
+            };
+
+            digest.input(&bytes);
+            count += bytes.len();
+        }
+
+        let result = digest.result();
+        let elapsed = started_at.elapsed();
+
+        println!("elapsed: {:?}", elapsed);
+
+        assert_eq!(count, 111_812_744);
+        assert_eq!(&result[..], hex!("33763f3541711e39fa743da45ff9512d54ade61406173f3d267ba4484cec7ea3"));
     }
 }

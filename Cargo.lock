@@ -1357,6 +1357,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-std",
+ "async-stream",
  "async-trait",
  "bitswap",
  "byteorder 1.3.4",
@@ -1364,6 +1365,7 @@ dependencies = [
  "domain",
  "env_logger",
  "futures 0.3.4",
+ "hex-literal",
  "ipfs-unixfs",
  "libipld 0.1.0 (git+https://github.com/ipfs-rust/rust-ipld?rev=b2286c53c13f3eeec2a3766387f2926838e8e4c9)",
  "libp2p",
@@ -1376,6 +1378,7 @@ dependencies = [
  "rocksdb",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "void",
 ]

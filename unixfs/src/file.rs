@@ -487,7 +487,7 @@ mod tests {
             .read_to_end(&mut block_buffer)
             .unwrap();
 
-        let mut visit = visit.start(&block_buffer[..]).unwrap().unwrap_continued();
+        let mut visit = visit.start(&block_buffer[..]).unwrap().1.unwrap_continued();
 
         loop {
             let key = visit.pending_links().next().unwrap();
@@ -499,7 +499,7 @@ mod tests {
                 .read_to_end(&mut block_buffer)
                 .unwrap();
 
-            match visit.continue_walk(&block_buffer[..]).unwrap() {
+            match visit.continue_walk(&block_buffer[..]).unwrap().1 {
                 Visitation::Completed(DigestVisit(sha, bytes)) => {
                     let result = sha.result();
                     let elapsed = started_at.elapsed();
@@ -539,7 +539,7 @@ mod tests {
             .read_to_end(&mut block_buffer)
             .unwrap();
 
-        let mut visit = visit.start(&block_buffer[..]).unwrap().unwrap_continued();
+        let mut visit = visit.start(&block_buffer[..]).unwrap().1.unwrap_continued();
 
         loop {
             let key = visit.pending_links().next().unwrap();
@@ -551,7 +551,7 @@ mod tests {
                 .read_to_end(&mut block_buffer)
                 .unwrap();
 
-            match visit.continue_walk(&block_buffer[..]).unwrap() {
+            match visit.continue_walk(&block_buffer[..]).unwrap().1 {
                 Visitation::Completed(DigestVisit(sha, bytes)) => {
                     let result = sha.result();
                     let elapsed = started_at.elapsed();
@@ -591,7 +591,7 @@ mod tests {
         let visit =
             IdleFileVisit::new(DigestVisit::default()).with_target_range(500_000..(500_000 + 32));
 
-        let mut visit = match visit.start(&block_buffer[..]).unwrap() {
+        let mut visit = match visit.start(&block_buffer[..]).unwrap().1 {
             Visitation::Continues(x) => x,
             _ => unreachable!(),
         };
@@ -606,7 +606,7 @@ mod tests {
                 .read_to_end(&mut block_buffer)
                 .unwrap();
 
-            match visit.continue_walk(&block_buffer[..]).unwrap() {
+            match visit.continue_walk(&block_buffer[..]).unwrap().1 {
                 Visitation::Completed(DigestVisit(sha, bytes)) => {
                     let result = sha.result();
                     let elapsed = started_at.elapsed();
@@ -646,7 +646,7 @@ mod tests {
         let visit = IdleFileVisit::new(DigestVisit::default())
             .with_target_range(500_000_000..(500_000_000 + 32));
 
-        let DigestVisit(sha, bytes) = visit.start(&block_buffer[..]).unwrap().unwrap_completion();
+        let DigestVisit(sha, bytes) = visit.start(&block_buffer[..]).unwrap().1.unwrap_completion();
 
         let result = sha.result();
 
