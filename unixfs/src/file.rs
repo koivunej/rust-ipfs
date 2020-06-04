@@ -455,14 +455,17 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct DigestVisit(sha2::Sha256);
+    struct DigestVisit(sha2::Sha256, usize);
 
     impl Visitor for DigestVisit {
         fn visit_content(&mut self, content: &[u8]) {
             self.0.input(content);
+            self.1 += content.len();
         }
     }
 
+    // This has been used as a poor mans benchmark, taking ~430ms to process the ~110MB in release
+    // build.
     #[test]
     fn visitor_traversal_from_blockstore() {
         let started_at = Instant::now();
@@ -486,8 +489,6 @@ mod tests {
 
         let mut visit = visit.start(&block_buffer[..]).unwrap().unwrap_continued();
 
-        let result;
-
         loop {
             let key = visit.pending_links().next().unwrap();
 
@@ -499,21 +500,21 @@ mod tests {
                 .unwrap();
 
             match visit.continue_walk(&block_buffer[..]).unwrap() {
-                Visitation::Completed(DigestVisit(sha)) => {
-                    result = sha.result();
+                Visitation::Completed(DigestVisit(sha, bytes)) => {
+                    let result = sha.result();
+                    let elapsed = started_at.elapsed();
+                    println!("{:?}", elapsed);
+
+                    assert_eq!(
+                        &result[..],
+                        hex!("33763f3541711e39fa743da45ff9512d54ade61406173f3d267ba4484cec7ea3")
+                    );
+                    assert_eq!(bytes, 111_812_744);
                     break;
                 }
                 Visitation::Continues(next) => visit = next,
             }
         }
-
-        let elapsed = started_at.elapsed();
-        println!("{:?}", elapsed);
-
-        assert_eq!(
-            &result[..],
-            hex!("33763f3541711e39fa743da45ff9512d54ade61406173f3d267ba4484cec7ea3")
-        );
     }
 
     #[test]
@@ -540,8 +541,6 @@ mod tests {
 
         let mut visit = visit.start(&block_buffer[..]).unwrap().unwrap_continued();
 
-        let result;
-
         loop {
             let key = visit.pending_links().next().unwrap();
 
@@ -553,21 +552,21 @@ mod tests {
                 .unwrap();
 
             match visit.continue_walk(&block_buffer[..]).unwrap() {
-                Visitation::Completed(DigestVisit(sha)) => {
-                    result = sha.result();
+                Visitation::Completed(DigestVisit(sha, bytes)) => {
+                    let result = sha.result();
+                    let elapsed = started_at.elapsed();
+                    println!("{:?}", elapsed);
+
+                    assert_eq!(
+                        &result[..],
+                        hex!("6369d42caf9966c5c7c1796b9c99248c0a8fbf506a690fcaefc478d4a97b3683")
+                    );
+                    assert_eq!(bytes, 300_000);
                     break;
                 }
                 Visitation::Continues(next) => visit = next,
             }
         }
-
-        let elapsed = started_at.elapsed();
-        println!("{:?}", elapsed);
-
-        assert_eq!(
-            &result[..],
-            hex!("6369d42caf9966c5c7c1796b9c99248c0a8fbf506a690fcaefc478d4a97b3683")
-        );
     }
 
     #[test]
@@ -597,8 +596,6 @@ mod tests {
             _ => unreachable!(),
         };
 
-        let result;
-
         loop {
             let key = visit.pending_links().next().unwrap();
 
@@ -610,21 +607,21 @@ mod tests {
                 .unwrap();
 
             match visit.continue_walk(&block_buffer[..]).unwrap() {
-                Visitation::Completed(DigestVisit(sha)) => {
-                    result = sha.result();
+                Visitation::Completed(DigestVisit(sha, bytes)) => {
+                    let result = sha.result();
+                    let elapsed = started_at.elapsed();
+                    println!("{:?}", elapsed);
+
+                    assert_eq!(
+                        &result[..],
+                        hex!("62ab21fbe03d0ab6be3938740272bf0b70b516f15901e8ee51ecffb71dfe9e2b")
+                    );
+                    assert_eq!(bytes, 32);
                     break;
                 }
                 Visitation::Continues(next) => visit = next,
             }
         }
-
-        let elapsed = started_at.elapsed();
-        println!("{:?}", elapsed);
-
-        assert_eq!(
-            &result[..],
-            hex!("62ab21fbe03d0ab6be3938740272bf0b70b516f15901e8ee51ecffb71dfe9e2b")
-        );
     }
 
     #[test]
@@ -649,7 +646,7 @@ mod tests {
         let visit = IdleFileVisit::new(DigestVisit::default())
             .with_target_range(500_000_000..(500_000_000 + 32));
 
-        let DigestVisit(sha) = visit.start(&block_buffer[..]).unwrap().unwrap_completion();
+        let DigestVisit(sha, bytes) = visit.start(&block_buffer[..]).unwrap().unwrap_completion();
 
         let result = sha.result();
 
@@ -661,6 +658,7 @@ mod tests {
             &result[..],
             hex!("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
         );
+        assert_eq!(bytes, 0);
     }
 
     use std::path::PathBuf;
@@ -690,7 +688,7 @@ mod tests {
             // files in Base32Upper
 
             let path = self.as_path(key);
-            println!("{} -> {:?}", cid::Cid::try_from(key).unwrap(), path);
+            //println!("{} -> {:?}", cid::Cid::try_from(key).unwrap(), path);
 
             std::fs::OpenOptions::new().read(true).open(path)
         }
