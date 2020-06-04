@@ -314,6 +314,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn traversal_from_blockstore() {
         let started_at = Instant::now();
 
@@ -470,6 +471,7 @@ mod tests {
     // This has been used as a poor mans benchmark, taking ~430ms to process the ~110MB in release
     // build.
     #[test]
+    #[ignore]
     fn visitor_traversal_from_blockstore() {
         let started_at = Instant::now();
 
@@ -521,6 +523,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn scoped_visitor_traversal_from_blockstore() {
         let started_at = Instant::now();
 
@@ -573,6 +576,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn less_than_block_scoped_traversal_from_blockstore() {
         let started_at = Instant::now();
 
@@ -628,6 +632,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn scoped_traversal_out_of_bounds_from_blockstore() {
         let started_at = Instant::now();
 

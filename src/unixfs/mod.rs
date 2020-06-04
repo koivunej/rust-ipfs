@@ -71,7 +71,7 @@ use ipfs_unixfs::file::{
 use std::fmt;
 use std::ops::Range;
 
-fn cat(
+pub fn cat(
     ipfs: Ipfs<impl IpfsTypes>,
     cid: Cid,
     range: Option<Range<u64>>,
@@ -147,7 +147,7 @@ fn cat(
 }
 
 #[derive(Debug)]
-enum TraversalFailed {
+pub enum TraversalFailed {
     Loading(Cid, Error),
     Walking(Cid, FileReadFailed),
 }
@@ -156,7 +156,7 @@ impl fmt::Display for TraversalFailed {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         use TraversalFailed::*;
         match self {
-            Loading(cid, e) => write!(fmt, "loading of block {} failed: {}", cid, e),
+            Loading(cid, e) => write!(fmt, "loading of {} failed: {}", cid, e),
             Walking(cid, e) => write!(fmt, "failed to walk {}: {}", cid, e),
         }
     }
@@ -181,11 +181,12 @@ mod tests {
         assert_eq!(cid.to_string(), cid2.to_string());
     }
 
+    #[ignore]
     #[async_std::test]
     async fn cat() {
         use crate::{IpfsOptions, UninitializedIpfs};
         use async_std::task;
-        use futures::stream::{Stream, StreamExt};
+        use futures::stream::StreamExt;
         use hex_literal::hex;
         use sha2::{Digest, Sha256};
         use std::time::{Duration, Instant};
