@@ -60,15 +60,13 @@ impl Ending {
                 // example has been found at least.
                 Err(FileError::TreeOverlapsBetweenLinks)?
             }
-            Ending::TreeCoverage(_) if next.start < offset => {
-                Err(FileError::EarlierLink)?
-            }
+            Ending::TreeCoverage(_) if next.start < offset => Err(FileError::EarlierLink)?,
             Ending::Chunk(chunk_end) if &next.start != chunk_end => {
                 // when continuing on from leaf node to either tree at above or a chunk at
                 // next, the next must continue where we stopped
                 Err(FileError::TreeJumpsBetweenLinks)?
             }
-            _ => Ok(())
+            _ => Ok(()),
         }
     }
 }
@@ -195,7 +193,8 @@ impl Traversal {
         next_block: &'a [u8],
         tree_range: &Range<u64>,
     ) -> Result<FileReader<'a>, FileReadFailed> {
-        self.last_ending.check_is_suitable_next(self.last_offset, &tree_range)?;
+        self.last_ending
+            .check_is_suitable_next(self.last_offset, &tree_range)?;
         FileReader::from_continued(self, tree_range.start, next_block)
     }
 }
@@ -252,23 +251,37 @@ mod tests {
     fn collapsing_tree() {
         // this is pretty much how I planned the ending might be useful but it's perhaps a bit
         // confusing as it's only the half of the range
-        Ending::TreeCoverage(100).check_is_suitable_next(0, &(0..100)).unwrap();
-        Ending::TreeCoverage(100).check_is_suitable_next(0, &(0..10)).unwrap();
-        Ending::TreeCoverage(100).check_is_suitable_next(0, &(0..2)).unwrap();
-        Ending::Chunk(2).check_is_suitable_next(0, &(2..10)).unwrap();
-        Ending::TreeCoverage(10).check_is_suitable_next(2, &(2..10)).unwrap();
-        Ending::TreeCoverage(10).check_is_suitable_next(2, &(10..20)).unwrap();
-        Ending::Chunk(10).check_is_suitable_next(2, &(10..100)).unwrap();
+        Ending::TreeCoverage(100)
+            .check_is_suitable_next(0, &(0..100))
+            .unwrap();
+        Ending::TreeCoverage(100)
+            .check_is_suitable_next(0, &(0..10))
+            .unwrap();
+        Ending::TreeCoverage(100)
+            .check_is_suitable_next(0, &(0..2))
+            .unwrap();
+        Ending::Chunk(2)
+            .check_is_suitable_next(0, &(2..10))
+            .unwrap();
+        Ending::TreeCoverage(10)
+            .check_is_suitable_next(2, &(2..10))
+            .unwrap();
+        Ending::TreeCoverage(10)
+            .check_is_suitable_next(2, &(10..20))
+            .unwrap();
+        Ending::Chunk(10)
+            .check_is_suitable_next(2, &(10..100))
+            .unwrap();
     }
 
     #[test]
     fn expanding_tree() {
         match Ending::TreeCoverage(100).check_is_suitable_next(10, &(0..102)) {
-            Err(FileReadFailed::File(FileError::TreeExpandsOnLinks)) => {},
+            Err(FileReadFailed::File(FileError::TreeExpandsOnLinks)) => {}
             x => panic!("unexpected {:?}", x),
         }
         match Ending::TreeCoverage(100).check_is_suitable_next(0, &(0..102)) {
-            Err(FileReadFailed::File(FileError::TreeExpandsOnLinks)) => {},
+            Err(FileReadFailed::File(FileError::TreeExpandsOnLinks)) => {}
             x => panic!("unexpected {:?}", x),
         }
     }
@@ -276,7 +289,7 @@ mod tests {
     #[test]
     fn overlap() {
         match Ending::TreeCoverage(100).check_is_suitable_next(10, &(88..102)) {
-            Err(FileReadFailed::File(FileError::TreeOverlapsBetweenLinks)) => {},
+            Err(FileReadFailed::File(FileError::TreeOverlapsBetweenLinks)) => {}
             x => panic!("unexpected {:?}", x),
         }
     }
@@ -284,7 +297,7 @@ mod tests {
     #[test]
     fn hole() {
         match Ending::Chunk(100).check_is_suitable_next(0, &(101..105)) {
-            Err(FileReadFailed::File(FileError::TreeJumpsBetweenLinks)) => {},
+            Err(FileReadFailed::File(FileError::TreeJumpsBetweenLinks)) => {}
             x => panic!("unexpected {:?}", x),
         }
     }
@@ -292,15 +305,15 @@ mod tests {
     #[test]
     fn wrong_next() {
         match Ending::TreeCoverage(200).check_is_suitable_next(100, &(0..100)) {
-            Err(FileReadFailed::File(FileError::EarlierLink)) => {},
+            Err(FileReadFailed::File(FileError::EarlierLink)) => {}
             x => panic!("unexpected {:?}", x),
         }
         match Ending::TreeCoverage(101).check_is_suitable_next(100, &(0..100)) {
-            Err(FileReadFailed::File(FileError::EarlierLink)) => {},
+            Err(FileReadFailed::File(FileError::EarlierLink)) => {}
             x => panic!("unexpected {:?}", x),
         }
         match Ending::TreeCoverage(100).check_is_suitable_next(100, &(0..100)) {
-            Err(FileReadFailed::File(FileError::EarlierLink)) => {},
+            Err(FileReadFailed::File(FileError::EarlierLink)) => {}
             x => panic!("unexpected {:?}", x),
         }
     }

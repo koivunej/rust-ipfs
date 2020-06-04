@@ -61,14 +61,21 @@ impl Into<String> for File {
     }
 }
 
-use futures::stream::Stream;
-use std::ops::Range;
-use std::fmt;
 use crate::{Ipfs, IpfsTypes};
 use async_stream::stream;
-use ipfs_unixfs::file::{FileReadFailed, visit::{IdleFileVisit, Visitation}};
+use futures::stream::Stream;
+use ipfs_unixfs::file::{
+    visit::{IdleFileVisit, Visitation},
+    FileReadFailed,
+};
+use std::fmt;
+use std::ops::Range;
 
-fn cat(ipfs: Ipfs<impl IpfsTypes>, cid: Cid, range: Option<Range<u64>>) -> impl Stream<Item = Result<Vec<u8>, TraversalFailed>> + Send + 'static {
+fn cat(
+    ipfs: Ipfs<impl IpfsTypes>,
+    cid: Cid,
+    range: Option<Range<u64>>,
+) -> impl Stream<Item = Result<Vec<u8>, TraversalFailed>> + Send + 'static {
     use bitswap::Block;
 
     // using async_stream here at least to get on faster; writing custom streams is not too easy
@@ -179,9 +186,9 @@ mod tests {
         use crate::{IpfsOptions, UninitializedIpfs};
         use async_std::task;
         use futures::stream::{Stream, StreamExt};
-        use std::time::{Instant, Duration};
-        use sha2::{Digest, Sha256};
         use hex_literal::hex;
+        use sha2::{Digest, Sha256};
+        use std::time::{Duration, Instant};
 
         let options = IpfsOptions::inmemory_with_generated_keys(false);
 
@@ -194,9 +201,12 @@ mod tests {
         println!("please connect an go-ipfs with Cid {}", cid);
 
         while ipfs.peers().await.unwrap().is_empty() {
-            async_std::future::timeout(Duration::from_millis(100), futures::future::pending::<()>())
-                .await
-                .unwrap_err();
+            async_std::future::timeout(
+                Duration::from_millis(100),
+                futures::future::pending::<()>(),
+            )
+            .await
+            .unwrap_err();
         }
 
         println!("got peer");
@@ -226,6 +236,9 @@ mod tests {
         println!("elapsed: {:?}", elapsed);
 
         assert_eq!(count, 111_812_744);
-        assert_eq!(&result[..], hex!("33763f3541711e39fa743da45ff9512d54ade61406173f3d267ba4484cec7ea3"));
+        assert_eq!(
+            &result[..],
+            hex!("33763f3541711e39fa743da45ff9512d54ade61406173f3d267ba4484cec7ea3")
+        );
     }
 }

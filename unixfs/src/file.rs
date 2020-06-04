@@ -1,4 +1,4 @@
-use crate::pb::{UnixFsReadFailed, UnixFsType, UnixFs};
+use crate::pb::{UnixFs, UnixFsReadFailed, UnixFsType};
 use std::borrow::Cow;
 use std::fmt;
 
@@ -65,7 +65,7 @@ pub enum FileReadFailed {
         hash: Vec<u8>,
         name: Cow<'static, str>,
         cause: cid::Error,
-    }
+    },
 }
 
 impl fmt::Display for FileReadFailed {
@@ -82,11 +82,12 @@ impl fmt::Display for FileReadFailed {
             ),
             Read(e) => write!(fmt, "reading failed: {}", e),
             LinkInvalidCid {
-                nth,
-                name,
-                cause,
-                ..
-            } => write!(fmt, "failed to convert link #{} ({:?}) to Cid: {}", nth, name, cause),
+                nth, name, cause, ..
+            } => write!(
+                fmt,
+                "failed to convert link #{} ({:?}) to Cid: {}",
+                nth, name, cause
+            ),
         }
     }
 }
@@ -142,11 +143,9 @@ impl fmt::Display for FileError {
                 fmt,
                 "filesize is non-zero while there are no links or content"
             ),
-            NonRootDefinesMetadata(metadata) => write!(
-                fmt,
-                "unsupported: non-root defines {:?}",
-                metadata
-            ),
+            NonRootDefinesMetadata(metadata) => {
+                write!(fmt, "unsupported: non-root defines {:?}", metadata)
+            }
             IntermediateNodeWithoutFileSize => {
                 write!(fmt, "intermediatery node with links but no filesize")
             }
@@ -646,7 +645,11 @@ mod tests {
         let visit = IdleFileVisit::new(DigestVisit::default())
             .with_target_range(500_000_000..(500_000_000 + 32));
 
-        let DigestVisit(sha, bytes) = visit.start(&block_buffer[..]).unwrap().1.unwrap_completion();
+        let DigestVisit(sha, bytes) = visit
+            .start(&block_buffer[..])
+            .unwrap()
+            .1
+            .unwrap_completion();
 
         let result = sha.result();
 

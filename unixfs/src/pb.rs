@@ -105,7 +105,6 @@ impl<'a> FlatUnixFs<'a> {
             .into_iter()
             .zip(self.data.blocksizes.iter().copied());
 
-
         // important: we have validated links.len() == blocksizes.len()
         RangeLinks::from_links_and_blocksizes(zipped, Some(0))
     }

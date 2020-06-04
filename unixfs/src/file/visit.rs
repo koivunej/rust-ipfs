@@ -1,7 +1,7 @@
-use std::ops::Range;
-use std::convert::TryFrom;
-use std::borrow::Cow;
 use cid::Cid;
+use std::borrow::Cow;
+use std::convert::TryFrom;
+use std::ops::Range;
 
 use crate::file::reader::{FileContent, FileReader, Traversal};
 use crate::file::{FileMetadata, FileReadFailed, UnwrapBorrowedExt};
@@ -53,7 +53,10 @@ impl<V: Visitor> IdleFileVisit<V> {
     }
 
     /// Begins the visitation by offering the first block to be visited.
-    pub fn start<'a>(mut self, block: &'a [u8]) -> Result<(&'a [u8], Visitation<V>), FileReadFailed> {
+    pub fn start<'a>(
+        mut self,
+        block: &'a [u8],
+    ) -> Result<(&'a [u8], Visitation<V>), FileReadFailed> {
         let fr = FileReader::from_block(block)?;
 
         self.visitor.visit_metadata(fr.as_ref());
@@ -92,19 +95,26 @@ impl<V: Visitor> IdleFileVisit<V> {
                 if pending.is_empty() {
                     Ok((&[][..], Visitation::Completed(self.visitor)))
                 } else {
-                    Ok((&[][..], Visitation::Continues(FileVisit {
-                        visitor: self.visitor,
-                        pending,
-                        state: traversal,
-                        range: self.range,
-                    })))
+                    Ok((
+                        &[][..],
+                        Visitation::Continues(FileVisit {
+                            visitor: self.visitor,
+                            pending,
+                            state: traversal,
+                            range: self.range,
+                        }),
+                    ))
                 }
             }
         }
     }
 }
 
-fn to_pending(nth: usize, link: PBLink<'_>, range: Range<u64>) -> Result<(Cid, Range<u64>), FileReadFailed> {
+fn to_pending(
+    nth: usize,
+    link: PBLink<'_>,
+    range: Range<u64>,
+) -> Result<(Cid, Range<u64>), FileReadFailed> {
     let hash = link.Hash.unwrap_borrowed();
 
     match Cid::try_from(hash) {
@@ -118,7 +128,7 @@ fn to_pending(nth: usize, link: PBLink<'_>, range: Range<u64>) -> Result<(Cid, R
                 None => Cow::Borrowed(""),
             },
             cause: e,
-        })
+        }),
     }
 }
 
@@ -187,7 +197,10 @@ impl<V: Visitor> FileVisit<V> {
     }
 
     /// Continues the walk with the data for the first `pending_link` key.
-    pub fn continue_walk<'a>(mut self, next: &'a [u8]) -> Result<(&'a [u8], Visitation<V>), FileReadFailed> {
+    pub fn continue_walk<'a>(
+        mut self,
+        next: &'a [u8],
+    ) -> Result<(&'a [u8], Visitation<V>), FileReadFailed> {
         let traversal = self.state;
         let (_, range) = self
             .pending
