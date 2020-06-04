@@ -32,6 +32,8 @@ impl AsRef<FileMetadata> for FileReader<'_> {
     }
 }
 
+// TODO: this could be Range ... It just seemed there seems to be "two kinds" of endings but in
+// reality these are closer to two kinds of ranges or spans.
 #[derive(Debug)]
 enum Ending {
     /// The block represented a subtree without actual content
@@ -52,7 +54,14 @@ impl Ending {
             Ending::TreeCoverage(cover_end) if &next.start < cover_end && &next.end > cover_end => {
                 // when moving to sibling at the same height or above, it's coverage must start
                 // from where we stopped
+                //
+                // This has been separated instead of making the TreeExpandsOnLinks more general as
+                // this might be a reasonable way with unixfs to reuse lower trees but no such
+                // example has been found at least.
                 Err(FileError::TreeOverlapsBetweenLinks)?
+            }
+            Ending::TreeCoverage(_) if next.start < offset => {
+                Err(FileError::EarlierLink)?
             }
             Ending::Chunk(chunk_end) if &next.start != chunk_end => {
                 // when continuing on from leaf node to either tree at above or a chunk at
@@ -187,18 +196,6 @@ impl Traversal {
         tree_range: &Range<u64>,
     ) -> Result<FileReader<'a>, FileReadFailed> {
         self.last_ending.check_is_suitable_next(self.last_offset, &tree_range)?;
-
-        // Hitting this assert would be a logic error on part of the traversal link processor. This
-        // does not guard against processing the same block multiple times, which can be tough one
-        // to debug.
-        assert!(
-            self.last_offset <= tree_range.start,
-            "We can go down or forward but not backwards, failed: {} <= {} with {:?}",
-            self.last_offset,
-            tree_range.start,
-            tree_range
-        );
-
         FileReader::from_continued(self, tree_range.start, next_block)
     }
 }
@@ -288,6 +285,22 @@ mod tests {
     fn hole() {
         match Ending::Chunk(100).check_is_suitable_next(0, &(101..105)) {
             Err(FileReadFailed::File(FileError::TreeJumpsBetweenLinks)) => {},
+            x => panic!("unexpected {:?}", x),
+        }
+    }
+
+    #[test]
+    fn wrong_next() {
+        match Ending::TreeCoverage(200).check_is_suitable_next(100, &(0..100)) {
+            Err(FileReadFailed::File(FileError::EarlierLink)) => {},
+            x => panic!("unexpected {:?}", x),
+        }
+        match Ending::TreeCoverage(101).check_is_suitable_next(100, &(0..100)) {
+            Err(FileReadFailed::File(FileError::EarlierLink)) => {},
+            x => panic!("unexpected {:?}", x),
+        }
+        match Ending::TreeCoverage(100).check_is_suitable_next(100, &(0..100)) {
+            Err(FileReadFailed::File(FileError::EarlierLink)) => {},
             x => panic!("unexpected {:?}", x),
         }
     }

@@ -105,6 +105,8 @@ pub enum FileError {
     /// The tree links contain overlapping file segments. This is at least unsupported right now,
     /// but the larger segment could be collapsed down to the reused part.
     TreeOverlapsBetweenLinks,
+    /// Reader has been fed a link to earlier range.
+    EarlierLink,
     /// The tree links contain a hole from a file segment to the next tree. This is at least
     /// unsupported right now. Zeroes could be generated for the hole.
     TreeJumpsBetweenLinks,
@@ -141,6 +143,7 @@ impl fmt::Display for FileError {
                 "total size of tree expands through links, it should only get smaller or keep size"
             ),
             TreeOverlapsBetweenLinks => write!(fmt, "unsupported: tree contains overlap"),
+            EarlierLink => write!(fmt, "error: earlier link given"),
             TreeJumpsBetweenLinks => write!(fmt, "unsupported: tree contains holes"),
             UnexpectedRawOrFileProperties { hash_type, fanout } => write!(
                 fmt,
