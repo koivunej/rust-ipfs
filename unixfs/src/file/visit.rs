@@ -1,7 +1,11 @@
 use std::ops::Range;
+use std::convert::TryFrom;
+use std::borrow::Cow;
+use cid::Cid;
 
 use crate::file::reader::{FileContent, FileReader, Traversal};
 use crate::file::{FileMetadata, FileReadFailed, UnwrapBorrowedExt};
+use crate::pb::merkledag::PBLink;
 
 // Long term goal is to be able have more of the visit traits for implementing `ipfs.get`
 // operation or to visit a directories with files, symlinks and nested directories.
@@ -58,18 +62,17 @@ impl<V: Visitor> IdleFileVisit<V> {
             FileContent::Spread(iter) => {
                 // we need to select suitable here
                 let mut pending = iter
-                    .filter_map(|(link, range)| {
+                    .enumerate()
+                    .filter_map(|(i, (link, range))| {
                         if let Some(target_range) = self.range.as_ref() {
                             if !partially_match_range(&range, &target_range) {
                                 return None;
                             }
                         }
 
-                        let hash = link.Hash.unwrap_borrowed().to_vec();
-
-                        Some((hash, range))
+                        Some(to_pending(i, link, range))
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<Result<Vec<(Cid, Range<u64>)>, _>>()?;
 
                 // order is reversed to consume them in the depth first order
                 pending.reverse();
@@ -86,6 +89,24 @@ impl<V: Visitor> IdleFileVisit<V> {
                 }
             }
         }
+    }
+}
+
+fn to_pending(nth: usize, link: PBLink<'_>, range: Range<u64>) -> Result<(Cid, Range<u64>), FileReadFailed> {
+    let hash = link.Hash.unwrap_borrowed();
+
+    match Cid::try_from(hash) {
+        Ok(cid) => Ok((cid, range)),
+        Err(e) => Err(FileReadFailed::LinkInvalidCid {
+            nth,
+            hash: hash.to_vec(),
+            name: match link.Name {
+                Some(Cow::Borrowed(x)) => Cow::Owned(String::from(x)),
+                Some(Cow::Owned(x)) => Cow::Owned(x),
+                None => Cow::Borrowed(""),
+            },
+            cause: e,
+        })
     }
 }
 
@@ -138,7 +159,7 @@ pub struct FileVisit<V> {
     ///
     /// One workaround would be to transform excess links to relative links to some block of a Cid.
     // FIXME: use Cid instead of Vec
-    pending: Vec<(Vec<u8>, Range<u64>)>,
+    pending: Vec<(Cid, Range<u64>)>,
     /// Target range, if any. Used to filter the links so that we will only visit interesting
     /// parts.
     range: Option<Range<u64>>,
@@ -149,8 +170,8 @@ impl<V: Visitor> FileVisit<V> {
     /// Access hashes of all pending links for prefetching purposes. The block for the first item
     /// returned by this iterator is the one which needs to be processed next with `continue_walk`.
     // FIXME: this must change to Cid
-    pub fn pending_links(&self) -> impl Iterator<Item = &[u8]> {
-        self.pending.iter().rev().map(|(link, _)| link.as_slice())
+    pub fn pending_links(&self) -> impl Iterator<Item = &Cid> {
+        self.pending.iter().rev().map(|(link, _)| link)
     }
 
     /// Continues the walk with the data for the first `pending_link` key.
@@ -186,19 +207,19 @@ impl<V: Visitor> FileVisit<V> {
             }
             FileContent::Spread(iter) => {
                 let target_range = self.range.clone();
-                let filtered = iter.filter_map(move |(link, range)| {
+                let before = self.pending.len();
+
+                for (i, (link, range)) in iter.enumerate() {
                     if let Some(target_range) = target_range.as_ref() {
                         if !partially_match_range(&range, &target_range) {
-                            return None;
+                            continue;
                         }
                     }
 
-                    let hash = link.Hash.unwrap_borrowed().to_vec();
-                    Some((hash, range))
-                });
+                    self.pending.push(to_pending(i, link, range)?);
+                }
 
-                let before = self.pending.len();
-                self.pending.extend(filtered);
+                // reverse to keep the next link we need to traverse as last, where pop() operates.
                 (&mut self.pending[before..]).reverse();
 
                 self.state = traversal;

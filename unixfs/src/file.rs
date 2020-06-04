@@ -60,6 +60,12 @@ pub enum FileReadFailed {
     UnexpectedType(i32),
     /// Parsing failed
     Read(UnixFsReadFailed),
+    LinkInvalidCid {
+        nth: usize,
+        hash: Vec<u8>,
+        name: Cow<'static, str>,
+        cause: cid::Error,
+    }
 }
 
 impl fmt::Display for FileReadFailed {
@@ -75,6 +81,12 @@ impl fmt::Display for FileReadFailed {
                 UnixFsType::from(*t)
             ),
             Read(e) => write!(fmt, "reading failed: {}", e),
+            LinkInvalidCid {
+                nth,
+                name,
+                cause,
+                ..
+            } => write!(fmt, "failed to convert link #{} ({:?}) to Cid: {}", nth, name, cause),
         }
     }
 }
@@ -481,7 +493,7 @@ mod tests {
 
             block_buffer.clear();
             blocks
-                .as_file(key)
+                .as_file(&key.to_bytes())
                 .unwrap()
                 .read_to_end(&mut block_buffer)
                 .unwrap();
@@ -535,7 +547,7 @@ mod tests {
 
             block_buffer.clear();
             blocks
-                .as_file(key)
+                .as_file(&key.to_bytes())
                 .unwrap()
                 .read_to_end(&mut block_buffer)
                 .unwrap();
@@ -592,7 +604,7 @@ mod tests {
 
             block_buffer.clear();
             blocks
-                .as_file(key)
+                .as_file(&key.to_bytes())
                 .unwrap()
                 .read_to_end(&mut block_buffer)
                 .unwrap();
