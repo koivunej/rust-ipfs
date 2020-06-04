@@ -373,6 +373,10 @@ mod tests {
 
                 let mut index = index;
 
+                // this sort of works by isn't actually generational indices which would be safer.
+                // the indexing still does work ok as this "cleaning" routine is done only after
+                // completly processing the subtree.
+
                 while tree_sizes[index] == 0 && index + 1 == tree_sizes.len() {
                     tree_sizes.pop();
                     if index > 0 {
