@@ -694,9 +694,11 @@ mod tests {
         }
     }
 
-    struct RLE<'a>(&'a [u64]);
+    /// Debug wrapper for a slice which is expected to have a lot of the same numbers, like an
+    /// dense storage for merkledag size validation, in which case T = u64.
+    struct RLE<'a, T: fmt::Display + PartialEq>(&'a [T]);
 
-    impl fmt::Debug for RLE<'_> {
+    impl<'a, T: fmt::Display + PartialEq> fmt::Debug for RLE<'_, T> {
         fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
             let total = self.0.len();
 
