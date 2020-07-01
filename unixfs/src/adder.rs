@@ -79,11 +79,7 @@ impl FileAdder {
                     Data: Some(Cow::Borrowed(self.block_buffer.as_slice())),
                     filesize: Some(self.block_buffer.len() as u64),
                     // no blocksizes as there are no links
-                    blocksizes: Vec::new(),
-                    hashType: None,
-                    fanout: None,
-                    mode: None,
-                    mtime: None,
+                    ..Default::default()
                 },
             };
 
@@ -122,8 +118,8 @@ impl FileAdder {
                 links,
                 data: UnixFs {
                     Type: UnixFsType::File,
-                    blocksizes,
                     filesize: Some(nested_size),
+                    blocksizes,
                     ..Default::default()
                 },
             };
