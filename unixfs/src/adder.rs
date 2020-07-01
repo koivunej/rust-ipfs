@@ -50,10 +50,11 @@ impl FileAdder {
         let written = accepted.len();
 
         let (leaf, links) = if !ready {
+            // a new block did not become ready, which means we couldn't have gotten a new cid.
             (None, None)
         } else {
+            // a new leaf must be output, as well as possibly a new link block
             let leaf = Some(self.flush_buffered_leaf().unwrap());
-
             let links = self.flush_buffered_links(NonZeroUsize::new(174).unwrap());
 
             (leaf, links)
@@ -250,6 +251,8 @@ mod tests {
         blocks_received.extend(last_blocks.map(|(_, slice)| slice.to_vec()));
 
         // the order here is "fo", "ob", "ar", "\n", root block
+        // while verifying the root Cid would be *enough* this is easier to eyeball, ... not really
+        // that much but ...
         let expected = [
             "QmfVyMoStzTvdnUR7Uotzh82gmL427q9z3xW5Y8fUoszi4",
             "QmdPyW4CWE3QBkgjWfjM5f7Tjb3HukxVuBXZtkqAGwsMnm",
