@@ -28,6 +28,7 @@ pub mod dagpb;
 /// Support for walking over all UnixFs trees.
 pub mod walk;
 
+#[cfg(test)]
 mod adder;
 
 #[cfg(test)]
