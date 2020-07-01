@@ -16,15 +16,61 @@ impl Adder {
 
 #[derive(Default)]
 struct FileAdder {
+    chunker: Chunker,
+    block_buffer: Vec<u8>,
+    unflushed_links: Vec<(Cid, usize)>,
+    total_blocks: usize,
 }
 
 impl FileAdder {
-    fn push<'a>(&'a mut self, bytes: &[u8]) -> Result<Option<&'a [u8]>, ()> {
-        todo!("return if a new non-root block needs to be stored")
+    fn push<'a>(
+        &'a mut self,
+        input: &[u8],
+    ) -> Result<(impl Iterator<Item = (&'a Cid, &'a [u8])>, usize), ()> {
+        // case 0: full chunk is not ready => empty iterator, full read
+        // case 1: full chunk becomes ready, maybe short read => at least one block
+        //     1a: not enough links => iterator of one
+        //     1b: link block is ready => iterator of two blocks
+
+        let (accepted, ready) = self.chunker.accept(input, &self.block_buffer);
+        self.block_buffer.extend_from_slice(accepted);
+        let written = accepted.len();
+
+        if !ready {
+            Ok((std::iter::empty(), written))
+        } else {
+            // if self.unflushed_links.
+            todo!()
+        }
     }
 
     fn finish(self) -> Vec<u8> {
         todo!("return the root block")
+    }
+}
+
+enum Chunker {
+    Size(usize),
+}
+
+impl std::default::Default for Chunker {
+    fn default() -> Self {
+        Chunker::Size(256 * 1024)
+    }
+}
+
+impl Chunker {
+    fn accept<'a>(&mut self, input: &'a [u8], buffered: &[u8]) -> (&'a [u8], bool) {
+        use Chunker::*;
+
+        match self {
+            Size(max) => {
+                let l = input.len().min(buffered.len() + input.len().max(*max));
+                let accepted = &input[..l];
+                let ready = l + input.len() >= *max;
+                (accepted, ready)
+            }
+        }
     }
 }
 
@@ -42,35 +88,21 @@ mod tests {
         // everyones favourite content
         let content = b"foobar\n";
 
-        let mut file_adder = FileAdder::default();
-        assert!(file_adder.push(content).unwrap().is_none());
-        let file_block = file_adder.finish();
+        let mut adder = FileAdder::default();
+
+        {
+            let (mut ready_blocks, bytes) = adder.push(content).unwrap();
+            assert!(ready_blocks.next().is_none());
+            assert_eq!(bytes, content.len());
+        }
 
         // real impl would probably hash this ... except maybe hashing is faster when done inline?
         // or maybe not
+        let file_block = adder.finish();
 
-        assert_eq!(blocks.get_by_str("QmRgutAxd8t7oGkSm4wmeuByG6M51wcTso6cubDdQtuEfL"), file_block.as_slice());
-    }
-
-    #[test]
-    fn single_link_directory() {
-        let blocks = FakeBlockstore::with_fixtures();
-        // everyones favourite content
-        let content = b"foobar\n";
-
-        let mut file_adder = FileAdder::default();
-        assert!(file_adder.push(content).unwrap().is_none());
-        let file_block = file_adder.finish();
-
-        // here we would need to turn the file_block into Cid, for example by storing it.
-        drop(file_block);
-
-        let mut adder = Adder::default();
-        adder.push("foobar", Cid::from_str("QmRgutAxd8t7oGkSm4wmeuByG6M51wcTso6cubDdQtuEfL").unwrap())
-            .expect("this error would probably only be for unsupported sharded dirs?");
-
-        let dirs = adder.finish();
-
-        assert_eq!(blocks.get_by_str("QmRgutAxd8t7oGkSm4wmeuByG6M51wcTso6cubDdQtuEfL"), dirs[0].as_slice());
+        assert_eq!(
+            blocks.get_by_str("QmRgutAxd8t7oGkSm4wmeuByG6M51wcTso6cubDdQtuEfL"),
+            file_block.as_slice()
+        );
     }
 }
