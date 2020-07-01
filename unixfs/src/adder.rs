@@ -170,7 +170,7 @@ impl Chunker {
             Size(max) => {
                 let l = input.len().min(*max);
                 let accepted = &input[..l];
-                let ready = l + input.len() >= *max;
+                let ready = buffered.len() + l >= *max;
                 (accepted, ready)
             }
         }
@@ -184,6 +184,22 @@ mod tests {
     use crate::test_support::FakeBlockstore;
     // use cid::Cid;
     // use std::str::FromStr;
+
+    #[test]
+    fn test_size_chunker() {
+        assert_eq!(size_chunker_scenario(1, 4, 0), (1, true));
+        assert_eq!(size_chunker_scenario(2, 4, 0), (2, true));
+        assert_eq!(size_chunker_scenario(2, 1, 0), (1, false));
+        assert_eq!(size_chunker_scenario(2, 1, 1), (1, true));
+    }
+
+    fn size_chunker_scenario(max: usize, input_len: usize, existing_len: usize) -> (usize, bool) {
+        let input = vec![0; input_len];
+        let existing = vec![0; existing_len];
+
+        let (accepted, ready) = Chunker::Size(max).accept(&input, &existing);
+        (accepted.len(), ready)
+    }
 
     #[test]
     fn favourite_single_block_file() {
