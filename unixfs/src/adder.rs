@@ -27,8 +27,6 @@ struct FileAdder {
     chunker: Chunker,
     block_buffer: Vec<u8>,
     unflushed_links: Vec<(Cid, u64, u64)>,
-    total_blocks: usize,
-    filesize: u64,
 }
 
 impl FileAdder {
