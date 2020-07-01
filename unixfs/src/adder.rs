@@ -44,8 +44,40 @@ impl FileAdder {
         }
     }
 
-    fn finish(self) -> Vec<u8> {
-        todo!("return the root block")
+    fn finish(self) -> Result<Vec<u8>, quick_protobuf::Error> {
+        use crate::pb::{FlatUnixFs, UnixFs, UnixFsType};
+        use quick_protobuf::{MessageWrite, Writer};
+        use std::borrow::Cow;
+        use std::io::Write;
+
+        let message = if !self.block_buffer.is_empty() {
+            assert!(self.unflushed_links.is_empty());
+
+            FlatUnixFs {
+                links: Vec::new(),
+                data: UnixFs {
+                    Type: UnixFsType::File,
+                    Data: Some(Cow::Borrowed(self.block_buffer.as_slice())),
+                    filesize: Some(self.block_buffer.len() as u64),
+                    // no blocksizes as there are no links
+                    blocksizes: Vec::new(),
+                    hashType: None,
+                    fanout: None,
+                    mode: None,
+                    mtime: None,
+                },
+            }
+        } else {
+            todo!("finish with link block")
+        };
+
+        let mut out = Vec::with_capacity(message.get_size());
+
+        let mut writer = Writer::new(&mut out);
+
+        message.write_message(&mut writer)?;
+
+        Ok(out)
     }
 }
 
@@ -98,7 +130,7 @@ mod tests {
 
         // real impl would probably hash this ... except maybe hashing is faster when done inline?
         // or maybe not
-        let file_block = adder.finish();
+        let file_block = adder.finish().unwrap();
 
         assert_eq!(
             blocks.get_by_str("QmRgutAxd8t7oGkSm4wmeuByG6M51wcTso6cubDdQtuEfL"),
