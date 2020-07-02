@@ -187,6 +187,23 @@ impl FileAdder {
 
         ret
     }
+
+    #[cfg(test)]
+    fn collect_blocks(mut self, all_content: &[u8]) -> Vec<(Cid, Vec<u8>)> {
+        let mut written = 0;
+        let mut blocks_received = Vec::new();
+
+        while written < all_content.len() {
+            let (blocks, pushed) = self.push(&all_content[written..]).unwrap();
+            blocks_received.extend(blocks);
+            written += pushed;
+        }
+
+        let last_blocks = self.finish();
+        blocks_received.extend(last_blocks);
+
+        blocks_received
+    }
 }
 
 fn render_and_hash(flat: FlatUnixFs<'_>) -> (Cid, Vec<u8>) {
@@ -242,7 +259,8 @@ mod tests {
 
     use super::{Chunker, /*Adder,*/ FileAdder};
     use crate::test_support::FakeBlockstore;
-    // use cid::Cid;
+    use cid::Cid;
+    use std::convert::TryFrom;
     // use std::str::FromStr;
 
     #[test]
@@ -294,20 +312,9 @@ mod tests {
 
         let blocks = FakeBlockstore::with_fixtures();
         let content = b"foobar\n";
-        let mut adder = FileAdder::with_chunker(Chunker::Size(2));
+        let adder = FileAdder::with_chunker(Chunker::Size(2));
 
-        let mut written = 0;
-        let mut blocks_received = Vec::new();
-
-        while written < content.len() {
-            let (blocks, pushed) = adder.push(&content[written..]).unwrap();
-            assert!(pushed > 0 && pushed <= 2, "pushed: {}", pushed);
-            blocks_received.extend(blocks.map(|(_, slice)| slice.to_vec()));
-            written += pushed;
-        }
-
-        let last_blocks = adder.finish();
-        blocks_received.extend(last_blocks.map(|(_, slice)| slice.to_vec()));
+        let blocks_received = adder.collect_blocks(content);
 
         // the order here is "fo", "ob", "ar", "\n", root block
         // while verifying the root Cid would be *enough* this is easier to eyeball, ... not really
@@ -320,7 +327,11 @@ mod tests {
             "QmRJHYTNvC3hmd9gJQARxLR1QMEincccBV53bBw524yyq6",
         ]
         .iter()
-        .map(|key| blocks.get_by_str(key).to_vec())
+        .map(|key| {
+            let cid = Cid::try_from(*key).unwrap();
+            let block = blocks.get_by_str(key).to_vec();
+            (cid, block)
+        })
         .collect::<Vec<_>>();
 
         assert_eq!(blocks_received, expected);
