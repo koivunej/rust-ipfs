@@ -244,7 +244,7 @@ impl Chunker {
 
         match self {
             Size(max) => {
-                let l = input.len().min(*max);
+                let l = input.len().min(*max - buffered.len());
                 let accepted = &input[..l];
                 let ready = buffered.len() + l >= *max;
                 (accepted, ready)
