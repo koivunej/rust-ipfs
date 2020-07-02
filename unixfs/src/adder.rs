@@ -10,19 +10,6 @@ use std::num::NonZeroUsize;
 use sha2::{Digest, Sha256};
 
 #[derive(Default)]
-struct Adder;
-
-impl Adder {
-    fn push(&mut self, path: impl AsRef<Path>, cid: Cid) -> Result<(), ()> {
-        todo!("should this be able to return block?")
-    }
-
-    fn finish(self) -> Vec<Vec<u8>> {
-        todo!("return all directories blocks")
-    }
-}
-
-#[derive(Default)]
 struct FileAdder {
     chunker: Chunker,
     block_buffer: Vec<u8>,
