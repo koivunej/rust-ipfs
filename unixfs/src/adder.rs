@@ -131,18 +131,16 @@ impl FileAdder {
         let mut ret = Vec::new();
 
         for level in 0.. {
-            if self.unflushed_links.len() < level {
-                break;
-            }
-
-            if !all || self.unflushed_links[level].len() < min_links.get() {
-                break;
-            }
-
-            if all && self.unflushed_links[level].len() == 1 {
-                // TODO: combine with above?
-                // we need to break here as otherwise we'd be looping for ever
-                break;
+            if !all {
+                if self.unflushed_links[level].len() < min_links.get() {
+                    break;
+                }
+            } else {
+                if self.unflushed_links[level].len() == 1 {
+                    // TODO: combine with above?
+                    // we need to break here as otherwise we'd be looping for ever
+                    break;
+                }
             }
 
             let mut links = Vec::with_capacity(self.unflushed_links.len());
