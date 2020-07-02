@@ -1,10 +1,8 @@
 use cid::Cid;
-use std::path::Path;
 
 use crate::pb::{FlatUnixFs, PBLink, UnixFs, UnixFsType};
 use quick_protobuf::{MessageWrite, Writer};
 use std::borrow::Cow;
-use std::io::Write;
 use std::num::NonZeroUsize;
 
 use sha2::{Digest, Sha256};
@@ -13,7 +11,9 @@ use sha2::{Digest, Sha256};
 struct FileAdder {
     chunker: Chunker,
     block_buffer: Vec<u8>,
-    unflushed_links: Vec<(Cid, u64, u64)>,
+    // the index in the outer vec is the height (0 == leaf, 1 == first links to leafs, 2 == links
+    // to first link blocks)
+    unflushed_links: Vec<Vec<(Cid, u64, u64)>>,
 }
 
 impl FileAdder {
@@ -36,11 +36,11 @@ impl FileAdder {
 
         let (leaf, links) = if !ready {
             // a new block did not become ready, which means we couldn't have gotten a new cid.
-            (None, None)
+            (None, Vec::new())
         } else {
             // a new leaf must be output, as well as possibly a new link block
             let leaf = Some(self.flush_buffered_leaf().unwrap());
-            let links = self.flush_buffered_links(NonZeroUsize::new(174).unwrap());
+            let links = self.flush_buffered_links(NonZeroUsize::new(174).unwrap(), false);
 
             (leaf, links)
         };
@@ -49,8 +49,35 @@ impl FileAdder {
     }
 
     fn finish(mut self) -> impl Iterator<Item = (Cid, Vec<u8>)> {
+        /*
+
+        file    |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -|
+        links#0 |-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|
+        links#1 |-------|-------|-------|-------|-------|-------|-------|\   /
+        links#2 |-------------------------------|                         ^^^
+                                                                    one short
+
+        #finish(...) first iteration:
+
+        file    |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -|
+        links#0 |-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|
+        links#1 |-------|-------|-------|-------|-------|-------|-------|==1==|
+        links#2 |-------------------------------|==========================2==|
+
+        new blocks #1 and #2
+
+        #finish(...) second iteration:
+
+        file    |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -|
+        links#0 |-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|
+        links#1 |-------|-------|-------|-------|-------|-------|-------|--1--|
+        links#2 |-------------------------------|--------------------------2--|
+        links#3 |==========================================================3==|
+
+        new block #3 (the root block)
+        */
         let last_leaf = self.flush_buffered_leaf();
-        let root_links = self.flush_buffered_links(NonZeroUsize::new(1).unwrap());
+        let root_links = self.flush_buffered_links(NonZeroUsize::new(1).unwrap(), true);
         // should probably error if there is neither?
         last_leaf.into_iter().chain(root_links.into_iter())
     }
@@ -75,8 +102,13 @@ impl FileAdder {
             let total_size = vec.len();
 
             self.block_buffer.clear();
-            self.unflushed_links
-                .push((cid.clone(), total_size as u64, bytes as u64));
+
+            // leafs always go to the lowest level
+            if self.unflushed_links.is_empty() {
+                self.unflushed_links.push(Vec::new());
+            }
+
+            self.unflushed_links[0].push((cid.clone(), total_size as u64, bytes as u64));
 
             Some((cid, vec))
         } else {
@@ -84,20 +116,39 @@ impl FileAdder {
         }
     }
 
-    fn flush_buffered_links(&mut self, min_links: NonZeroUsize) -> Option<(Cid, Vec<u8>)> {
-        if self.unflushed_links.len() >= min_links.get() {
+    // FIXME: collapse the min_links and all into single type to avoid boolean args
+    fn flush_buffered_links(&mut self, min_links: NonZeroUsize, all: bool) -> Vec<(Cid, Vec<u8>)> {
+        let mut ret = Vec::new();
+
+        for level in 0.. {
+            if self.unflushed_links.len() < level {
+                break;
+            }
+
+            if !all || self.unflushed_links[level].len() < min_links.get() {
+                break;
+            }
+
+            if all && self.unflushed_links[level].len() == 1 {
+                // TODO: combine with above?
+                // we need to break here as otherwise we'd be looping for ever
+                break;
+            }
+
             let mut links = Vec::with_capacity(self.unflushed_links.len());
             let mut blocksizes = Vec::with_capacity(self.unflushed_links.len());
 
             let mut nested_size = 0;
+            let mut nested_total_size = 0;
 
-            for (cid, total_size, block_size) in self.unflushed_links.drain(..) {
+            for (cid, total_size, block_size) in self.unflushed_links[level].drain(..) {
                 links.push(PBLink {
                     Hash: Some(cid.to_bytes().into()),
                     Name: Some("".into()),
                     Tsize: Some(total_size),
                 });
                 blocksizes.push(block_size);
+                nested_total_size += total_size;
                 nested_size += block_size;
             }
 
@@ -111,17 +162,28 @@ impl FileAdder {
                 },
             };
 
-            println!("flushing {:#?}", inner.data);
-
             let (cid, vec) = render_and_hash(inner);
-            Some((cid, vec))
-        } else {
-            None
+
+            if self.unflushed_links.len() <= level + 1 {
+                self.unflushed_links.push(Vec::new());
+            }
+
+            self.unflushed_links[level + 1].push((
+                cid.clone(),
+                nested_total_size + vec.len() as u64,
+                nested_size,
+            ));
+
+            ret.push((cid, vec))
         }
+
+        ret
     }
 }
 
 fn render_and_hash(flat: FlatUnixFs<'_>) -> (Cid, Vec<u8>) {
+    // as shown in later dagger we don't really need to render the FlatUnixFs fully; we could
+    // either just render a fixed header and continue with the body OR links.
     let mut out = Vec::with_capacity(flat.get_size());
     let mut writer = Writer::new(&mut out);
     flat.write_message(&mut writer)
