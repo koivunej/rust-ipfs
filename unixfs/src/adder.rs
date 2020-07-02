@@ -7,8 +7,7 @@ use std::num::NonZeroUsize;
 
 use sha2::{Digest, Sha256};
 
-#[derive(Default)]
-struct FileAdder {
+pub struct FileAdder {
     chunker: Chunker,
     block_buffer: Vec<u8>,
     // the index in the outer vec is the height (0 == leaf, 1 == first links to leafs, 2 == links
@@ -16,15 +15,26 @@ struct FileAdder {
     unflushed_links: Vec<Vec<(Cid, u64, u64)>>,
 }
 
+impl std::default::Default for FileAdder {
+    fn default() -> Self {
+        Self::with_chunker(Chunker::Size(1024 * 256))
+    }
+}
+
 impl FileAdder {
-    fn with_chunker(chunker: Chunker) -> Self {
+    pub fn with_chunker(chunker: Chunker) -> Self {
+        let hint = chunker.size_hint();
         FileAdder {
             chunker,
-            ..Default::default()
+            block_buffer: Vec::with_capacity(hint),
+            unflushed_links: Default::default(),
         }
     }
 
-    fn push(&mut self, input: &[u8]) -> Result<(impl Iterator<Item = (Cid, Vec<u8>)>, usize), ()> {
+    pub fn push(
+        &mut self,
+        input: &[u8],
+    ) -> Result<(impl Iterator<Item = (Cid, Vec<u8>)>, usize), ()> {
         // case 0: full chunk is not ready => empty iterator, full read
         // case 1: full chunk becomes ready, maybe short read => at least one block
         //     1a: not enough links => iterator of one
@@ -48,7 +58,7 @@ impl FileAdder {
         Ok((leaf.into_iter().chain(links.into_iter()), written))
     }
 
-    fn finish(mut self) -> impl Iterator<Item = (Cid, Vec<u8>)> {
+    pub fn finish(mut self) -> impl Iterator<Item = (Cid, Vec<u8>)> {
         /*
 
         file    |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -|
@@ -196,7 +206,7 @@ fn render_and_hash(flat: FlatUnixFs<'_>) -> (Cid, Vec<u8>) {
     (cid, out)
 }
 
-enum Chunker {
+pub enum Chunker {
     Size(usize),
 }
 
@@ -217,6 +227,14 @@ impl Chunker {
                 let ready = buffered.len() + l >= *max;
                 (accepted, ready)
             }
+        }
+    }
+
+    fn size_hint(&self) -> usize {
+        use Chunker::*;
+
+        match self {
+            Size(max) => *max,
         }
     }
 }
