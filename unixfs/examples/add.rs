@@ -1,38 +1,51 @@
 use cid::Cid;
 use ipfs_unixfs::file::adder::FileAdder;
 use std::fmt;
-use std::io::{BufRead, BufReader};
+use std::io::{Read, BufRead, BufReader};
 use std::time::Duration;
+use std::num::NonZeroUsize;
+
+enum Mode {
+    BufReader,
+    SizeHint,
+    ThreadedSizeHint(NonZeroUsize),
+}
 
 fn main() {
     // read stdin, maybe produce stdout car?
 
     let stdin = std::io::stdin();
-    let stdin = stdin.lock();
 
     let mut adder = FileAdder::default();
 
-    let mut stdin = BufReader::with_capacity(adder.size_hint(), stdin);
-
+    eprintln!("using size_hint: {}", adder.size_hint());
     let mut stats = Stats::default();
-
     let mut input = 0;
 
-    loop {
-        match stdin.fill_buf().unwrap() {
-            x if x.is_empty() => {
-                eprintln!("finishing");
-                eprintln!("{:?}", adder);
-                let blocks = adder.finish();
-                stats.process(blocks);
-                break;
-            }
-            x => {
+    let mode = Mode::BufReader;
+    //let mode = Mode::SizeHint;
+    //let mode = Mode::ThreadedSizeHint(NonZeroUsize::new(4).unwrap());
+
+    match mode {
+        Mode::BufReader => {
+            let mut stdin = BufReader::with_capacity(adder.size_hint(), stdin.lock());
+
+            loop {
+                let buf = match stdin.fill_buf().unwrap() {
+                    last if last.is_empty() => {
+                        eprintln!("finishing\n{:?}", adder);
+                        let blocks = adder.finish();
+                        stats.process(blocks);
+                        break;
+                    }
+                    buf => buf
+                };
+
                 let mut total = 0;
 
-                while total < x.len() {
+                while total < buf.len() {
                     let (blocks, consumed) = adder
-                        .push(&x[total..])
+                        .push(&buf[total..])
                         .expect("no idea what could fail here?");
                     stats.process(blocks);
 
@@ -40,9 +53,119 @@ fn main() {
                     total += consumed;
                 }
 
-                assert_eq!(total, x.len());
+                assert_eq!(total, buf.len());
                 stdin.consume(total);
             }
+        },
+        Mode::SizeHint => {
+            let mut stdin = stdin.lock();
+            let mut buf = vec![0u8; adder.size_hint()];
+
+            loop {
+                let mut new_bytes = 0;
+                let mut last = false;
+
+                loop {
+                    let read = stdin.read(&mut buf[new_bytes..]).unwrap();
+
+                    new_bytes += read;
+
+                    if read == 0 {
+                        last = true;
+                        break
+                    } else if new_bytes == buf.capacity() {
+                        break
+                    }
+                }
+
+                let mut total = 0;
+
+                while total < new_bytes {
+                    let (blocks, consumed) = adder.push(&buf[total..new_bytes]).unwrap();
+
+                    stats.process(blocks);
+
+                    input += consumed;
+                    total += consumed;
+                }
+
+                assert_eq!(total, new_bytes);
+
+                if last {
+                    eprintln!("finishing\n{:?}", adder);
+                    let blocks = adder.finish();
+                    stats.process(blocks);
+                    break
+                }
+            }
+        },
+        Mode::ThreadedSizeHint(buffers) => {
+            let (filled_buffer_tx, filled_buffer_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+            let (consumed_buffer_tx, consumed_buffer_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+
+            let jh = std::thread::spawn(move || {
+                let mut stdin = stdin.lock();
+
+                for mut buf in consumed_buffer_rx.iter() {
+                    assert_eq!(buf.len(), buf.capacity());
+                    let mut new_bytes = 0;
+                    let mut last = false;
+
+                    loop {
+                        let read = stdin.read(&mut buf[new_bytes..]).unwrap();
+
+                        new_bytes += read;
+
+                        if read == 0 {
+                            last = true;
+                            break
+                        } else if new_bytes == buf.capacity() {
+                            break
+                        }
+                    }
+
+                    if new_bytes > 0 {
+                        if new_bytes < buf.capacity() {
+                            // this should only happen on the last iteration
+                            buf.truncate(new_bytes);
+                        }
+                        filled_buffer_tx.send(buf).unwrap();
+                    }
+
+                    if last {
+                        break;
+                    }
+                }
+            });
+
+            for _ in 0..buffers.get() {
+                consumed_buffer_tx.send(vec![0u8; adder.size_hint()]).unwrap();
+            }
+
+            for buf in filled_buffer_rx.iter() {
+                let mut total = 0;
+                let len = buf.len();
+
+                while total < len {
+                    let (blocks, consumed) = adder.push(&buf[total..len]).unwrap();
+
+                    stats.process(blocks);
+
+                    input += consumed;
+                    total += consumed;
+                }
+
+                assert_eq!(total, len);
+
+                // ignore this to avoid error in the end
+                let _ = consumed_buffer_tx.send(buf);
+            }
+
+            eprintln!("finishing\n{:?}", adder);
+            let blocks = adder.finish();
+            stats.process(blocks);
+
+            jh.join().unwrap();
         }
     }
 

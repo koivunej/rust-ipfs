@@ -44,10 +44,9 @@ impl FileAdder {
     /// Creates `FileAdder` with the given chunker. Typically one could just call
     /// `FileAdder::default()`.
     pub fn with_chunker(chunker: Chunker) -> Self {
-        let hint = chunker.size_hint();
         FileAdder {
             chunker,
-            block_buffer: Vec::with_capacity(hint),
+            block_buffer: Vec::new(),
             unflushed_links: Default::default(),
         }
     }
@@ -71,21 +70,33 @@ impl FileAdder {
         //     1b: link block is ready => iterator of two blocks
 
         let (accepted, ready) = self.chunker.accept(input, &self.block_buffer);
-        self.block_buffer.extend_from_slice(accepted);
-        let written = accepted.len();
 
-        let (leaf, links) = if !ready {
-            // a new block did not become ready, which means we couldn't have gotten a new cid.
-            (None, Vec::new())
-        } else {
-            // a new leaf must be output, as well as possibly a new link block
-            let leaf = Some(self.flush_buffered_leaf().unwrap());
+        if self.block_buffer.is_empty() && ready {
+            // try to fast path and avoid copying the accepted to the local buffer whenever the
+            // caller uses a long enough buffer.
+            let leaf = Some(Self::flush_buffered_leaf(accepted, &mut self.unflushed_links).unwrap());
             let links = self.flush_buffered_links(NonZeroUsize::new(174).unwrap(), false);
 
-            (leaf, links)
-        };
+            Ok((leaf.into_iter().chain(links.into_iter()), accepted.len()))
+        } else {
+            self.block_buffer.extend_from_slice(accepted);
+            let written = accepted.len();
 
-        Ok((leaf.into_iter().chain(links.into_iter()), written))
+            let (leaf, links) = if !ready {
+                // a new block did not become ready, which means we couldn't have gotten a new cid.
+                (None, Vec::new())
+            } else {
+                // a new leaf must be output, as well as possibly a new link block
+                let leaf = Some(Self::flush_buffered_leaf(self.block_buffer.as_slice(), &mut self.unflushed_links).unwrap());
+                let links = self.flush_buffered_links(NonZeroUsize::new(174).unwrap(), false);
+
+                self.block_buffer.clear();
+
+                (leaf, links)
+            };
+
+            Ok((leaf.into_iter().chain(links.into_iter()), written))
+        }
     }
 
     /// Called after the last [`FileAdder::push`] to finish the tree construction.
@@ -95,24 +106,24 @@ impl FileAdder {
     /// Note: the API will hopefully evolve to a direction which would not allocate new Vec for
     /// every block in the near-ish future.
     pub fn finish(mut self) -> impl Iterator<Item = (Cid, Vec<u8>)> {
-        let last_leaf = self.flush_buffered_leaf();
+        let last_leaf = Self::flush_buffered_leaf(self.block_buffer.as_slice(), &mut self.unflushed_links);
         let root_links = self.flush_buffered_links(NonZeroUsize::new(1).unwrap(), true);
         // should probably error if there is neither?
         last_leaf.into_iter().chain(root_links.into_iter())
     }
 
-    fn flush_buffered_leaf(&mut self) -> Option<(Cid, Vec<u8>)> {
-        if self.block_buffer.is_empty() {
+    fn flush_buffered_leaf(data: &[u8], unflushed_links: &mut Vec<Vec<(Cid, u64, u64)>>) -> Option<(Cid, Vec<u8>)> {
+        if data.is_empty() {
             return None;
         }
-        let bytes = self.block_buffer.len();
+        let bytes = data.len();
 
         let inner = FlatUnixFs {
             links: Vec::new(),
             data: UnixFs {
                 Type: UnixFsType::File,
-                Data: Some(Cow::Borrowed(self.block_buffer.as_slice())),
-                filesize: Some(self.block_buffer.len() as u64),
+                Data: Some(Cow::Borrowed(data)),
+                filesize: Some(bytes as u64),
                 // no blocksizes as there are no links
                 ..Default::default()
             },
@@ -122,14 +133,12 @@ impl FileAdder {
 
         let total_size = vec.len();
 
-        self.block_buffer.clear();
-
         // leafs always go to the lowest level
-        if self.unflushed_links.is_empty() {
-            self.unflushed_links.push(Vec::new());
+        if unflushed_links.is_empty() {
+            unflushed_links.push(Vec::new());
         }
 
-        self.unflushed_links[0].push((cid.clone(), total_size as u64, bytes as u64));
+        unflushed_links[0].push((cid.clone(), total_size as u64, bytes as u64));
 
         Some((cid, vec))
     }
