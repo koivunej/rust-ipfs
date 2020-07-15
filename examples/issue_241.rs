@@ -4,7 +4,7 @@ use ipfs::{IpfsOptions, Types, UninitializedIpfs};
 
 fn main() {
     env_logger::init();
-    let options = IpfsOptions::<Types>::default();
+    let options = IpfsOptions::inmemory_with_generated_keys(true);
 
     task::block_on(async move {
         println!("IPFS options: {:?}", options);
