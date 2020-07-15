@@ -11,6 +11,9 @@ fn main() {
         let (ipfs, future) = UninitializedIpfs::new(options).await.start().await.unwrap();
         task::spawn(future);
 
+        let id = ipfs.identity().await.unwrap().0.into_peer_id();
+        println!("{}", id);
+
         // Subscribe
         let topic = "test1234".to_owned();
         let mut subscription = ipfs.pubsub_subscribe(topic.clone()).await.unwrap();
