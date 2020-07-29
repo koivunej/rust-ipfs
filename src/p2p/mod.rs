@@ -50,6 +50,7 @@ impl<TSwarmTypes: SwarmTypes> From<&IpfsOptions<TSwarmTypes>> for SwarmOptions<T
 pub async fn create_swarm<TSwarmTypes: SwarmTypes>(
     options: SwarmOptions<TSwarmTypes>,
     ipfs: Ipfs<TSwarmTypes>,
+    name: Option<&'static str>,
 ) -> TSwarm<TSwarmTypes> {
     let peer_id = options.peer_id.clone();
 
@@ -60,10 +61,28 @@ pub async fn create_swarm<TSwarmTypes: SwarmTypes>(
     let behaviour = behaviour::build_behaviour(options, ipfs).await;
 
     // Create a Swarm
-    let mut swarm = libp2p::Swarm::new(transport, behaviour, peer_id);
+    let mut swarm = if let Some(name) = name {
+        libp2p::swarm::SwarmBuilder::new(transport, behaviour, peer_id)
+            .executor(Box::new(NamedExecutor(name)))
+            .build()
+    } else {
+        libp2p::Swarm::new(transport, behaviour, peer_id)
+    };
 
     // Listen on all interfaces and whatever port the OS assigns
     Swarm::listen_on(&mut swarm, "/ip4/127.0.0.1/tcp/0".parse().unwrap()).unwrap();
 
     swarm
+}
+
+struct NamedExecutor(&'static str);
+
+impl libp2p::core::Executor for NamedExecutor {
+    fn exec(
+        &self,
+        future: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'static + Send>>,
+    ) {
+        use tracing_futures::Instrument;
+        async_std::task::spawn(future.instrument(tracing::trace_span!("swarm", node = self.0)));
+    }
 }

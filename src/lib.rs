@@ -316,7 +316,44 @@ impl<Types: IpfsTypes> UninitializedIpfs<Types> {
         }));
 
         let swarm_options = SwarmOptions::<Types>::from(&self.options);
-        let swarm = create_swarm(swarm_options, ipfs.clone()).await;
+        let swarm = create_swarm(swarm_options, ipfs.clone(), None).await;
+
+        let fut = IpfsFuture {
+            repo_events: repo_events.fuse(),
+            from_facade: receiver.fuse(),
+            swarm,
+            listening_addresses: HashMap::new(),
+        };
+
+        Ok((ipfs, fut))
+    }
+
+    pub async fn start_named(
+        mut self,
+        name: &'static str,
+    ) -> Result<(Ipfs<Types>, impl std::future::Future<Output = ()>), Error> {
+        use futures::stream::StreamExt;
+
+        let repo = Option::take(&mut self.repo).unwrap();
+        repo.init().await?;
+
+        let repo_events = self
+            .moved_on_init
+            .take()
+            .expect("start cannot be called twice");
+
+        let (to_task, receiver) = channel::<IpfsEvent>(1);
+
+        let UninitializedIpfs { keys, .. } = self;
+
+        let ipfs = Ipfs(Arc::new(IpfsInner {
+            repo,
+            keys: DebuggableKeypair(keys),
+            to_task,
+        }));
+
+        let swarm_options = SwarmOptions::<Types>::from(&self.options);
+        let swarm = create_swarm(swarm_options, ipfs.clone(), Some(name)).await;
 
         let fut = IpfsFuture {
             repo_events: repo_events.fuse(),
@@ -976,6 +1013,29 @@ mod node {
                 .expect("Inmemory instance must succeed start");
 
             let jh = async_std::task::spawn(fut);
+
+            Node {
+                ipfs,
+                background_task: jh,
+            }
+        }
+
+        pub async fn with_name_and_options(
+            name: &'static str,
+            opts: IpfsOptions<TestTypes>,
+        ) -> Self {
+            use tracing_futures::Instrument;
+
+            let (ipfs, fut) = UninitializedIpfs::new(opts)
+                .instrument(tracing::trace_span!("init", node = name))
+                .await
+                .start_named(name)
+                .instrument(tracing::trace_span!("start", node = name))
+                .await
+                .expect("Inmemory instance must succeed start");
+
+            let jh =
+                async_std::task::spawn(fut.instrument(tracing::trace_span!("bgtask", node = name)));
 
             Node {
                 ipfs,

@@ -10,7 +10,6 @@ use std::env;
 use std::process::exit;
 
 fn main() {
-    env_logger::init();
     let options = IpfsOptions::<TestTypes>::default();
 
     // this example will wait forever attempting to fetch a CID provided at command line. It is

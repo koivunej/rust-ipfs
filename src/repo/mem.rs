@@ -52,10 +52,22 @@ impl BlockStore for MemBlockStore {
 
     async fn put(&self, block: Block) -> Result<(Cid, BlockPut), Error> {
         use std::collections::hash_map::Entry;
+
+        let start = std::time::Instant::now();
+
         let mut g = self.blocks.lock().await;
+
+        let elapsed = start.elapsed();
+
+        tracing::trace!(delay = tracing::field::debug(&elapsed), "lock obtained");
+
         match g.entry(RepoCid(block.cid.clone())) {
-            Entry::Occupied(_) => Ok((block.cid, BlockPut::Existed)),
+            Entry::Occupied(_) => {
+                tracing::trace!("already existing block");
+                Ok((block.cid, BlockPut::Existed))
+            }
             Entry::Vacant(ve) => {
+                tracing::trace!("new block");
                 let cid = ve.key().0.clone();
                 ve.insert(block);
                 Ok((cid, BlockPut::NewBlock))

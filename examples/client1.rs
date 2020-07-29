@@ -4,7 +4,6 @@ use ipfs::{IpfsOptions, Types, UninitializedIpfs};
 use libipld::ipld;
 
 fn main() {
-    env_logger::init();
     let options = IpfsOptions::<Types>::default();
 
     task::block_on(async move {

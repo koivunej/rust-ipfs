@@ -240,8 +240,6 @@ mod tests {
 
     #[async_std::test]
     async fn swarm_api() {
-        env_logger::init();
-
         let (peer1_id, trans) = mk_transport();
         let mut swarm1 = Swarm::new(trans, SwarmApi::new(), peer1_id);
 

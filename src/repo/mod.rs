@@ -194,8 +194,17 @@ impl<TRepoTypes: RepoTypes> Repo<TRepoTypes> {
 
     /// Puts a block into the block store.
     pub async fn put_block(&self, block: Block) -> Result<(Cid, BlockPut), Error> {
+        use tracing_futures::Instrument;
+
+        let span = tracing::trace_span!("put_block", cid = %block.cid);
+        let _enter = span.enter();
+
         let cid = block.cid.clone();
-        let (_cid, res) = self.block_store.put(block.clone()).await?;
+        let (_cid, res) = self
+            .block_store
+            .put(block.clone())
+            .in_current_span()
+            .await?;
         self.subscriptions
             .finish_subscription(cid.clone().into(), block);
         // sending only fails if no one is listening anymore
@@ -203,6 +212,7 @@ impl<TRepoTypes: RepoTypes> Repo<TRepoTypes> {
         self.events
             .clone()
             .send(RepoEvent::ProvideBlock(cid.clone()))
+            .in_current_span()
             .await
             .ok();
         Ok((cid, res))

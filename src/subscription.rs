@@ -61,15 +61,7 @@ impl fmt::Display for RequestKind {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Connect(addr) => write!(fmt, "Connect to {}", addr),
-            Self::GetBlock(cid) => write!(
-                fmt,
-                "Obtain block {}",
-                cid.hash()
-                    .digest()
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect::<String>()
-            ),
+            Self::GetBlock(cid) => write!(fmt, "Obtain block {}", cid),
             Self::KadQuery(id) => write!(fmt, "Kad request {:?}", id),
             #[cfg(test)]
             Self::Num(n) => write!(fmt, "A test request for {}", n),
@@ -107,6 +99,8 @@ impl<TRes: Debug + Clone + PartialEq> SubscriptionRegistry<TRes> {
         kind: RequestKind,
         cancel_notifier: Option<Sender<RepoEvent>>,
     ) -> SubscriptionFuture<TRes> {
+        use tracing_futures::Instrument;
+
         let id = GLOBAL_REQ_COUNT.fetch_add(1, Ordering::SeqCst);
         debug!("Creating subscription {} to {}", id, kind);
 
@@ -116,14 +110,19 @@ impl<TRes: Debug + Clone + PartialEq> SubscriptionRegistry<TRes> {
             subscription.cancel(kind.clone(), true);
         }
 
-        task::block_on(async {
-            self.subscriptions
-                .lock()
-                .await
-                .entry(kind.clone())
-                .or_default()
-                .insert(id, subscription);
-        });
+        let _s = tracing::trace_span!("block_on inserting", id = id);
+
+        task::block_on(
+            async {
+                self.subscriptions
+                    .lock()
+                    .await
+                    .entry(kind.clone())
+                    .or_default()
+                    .insert(id, subscription);
+            }
+            .in_current_span(),
+        );
 
         SubscriptionFuture {
             id,
@@ -135,8 +134,15 @@ impl<TRes: Debug + Clone + PartialEq> SubscriptionRegistry<TRes> {
     /// Finalizes all pending subscriptions of the specified kind with the given `result`.
     ///
     pub fn finish_subscription(&self, req_kind: RequestKind, result: TRes) {
-        let mut subscriptions = task::block_on(async { self.subscriptions.lock().await });
+        use tracing_futures::Instrument;
+
+        let _s = tracing::trace_span!("finishing sub");
+
+        let mut subscriptions =
+            task::block_on(async { self.subscriptions.lock().await }.in_current_span());
         let related_subs = subscriptions.get_mut(&req_kind);
+
+        let mut count = 0;
 
         // find all the matching `Subscription`s and wake up their tasks; only `Pending`
         // ones have an associated `SubscriptionFuture` and there can be multiple of them
@@ -145,9 +151,12 @@ impl<TRes: Debug + Clone + PartialEq> SubscriptionRegistry<TRes> {
             for sub in related_subs.values_mut() {
                 if let Subscription::Pending { .. } = sub {
                     sub.wake(result.clone());
+                    count += 1;
                 }
             }
         }
+
+        log::trace!("woke up {} subscriptions", count);
     }
 
     /// After `shutdown` all `SubscriptionFuture`s will return `Err(Cancelled)`.
@@ -203,7 +212,6 @@ impl fmt::Display for Cancelled {
 impl std::error::Error for Cancelled {}
 
 /// Represents a request for a resource at different stages of its lifetime.
-#[derive(Debug)]
 pub enum Subscription<TRes> {
     /// A finished `Subscription` containing the desired `TRes` value.
     Ready(TRes),
@@ -216,6 +224,32 @@ pub enum Subscription<TRes> {
     },
     /// A void subscription that was either cancelled or otherwise aborted.
     Cancelled,
+}
+
+impl<TRes> fmt::Debug for Subscription<TRes> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Subscription::*;
+        match self {
+            Ready(_) => write!(fmt, "Ready"),
+            Pending {
+                waker: Some(_),
+                cancel_notifier: Some(_),
+            } => write!(fmt, "Pending {{ waker: Some, cancel_notifier: Some }}"),
+            Pending {
+                waker: None,
+                cancel_notifier: Some(_),
+            } => write!(fmt, "Pending {{ waker: None, cancel_notifier: Some }}"),
+            Pending {
+                waker: Some(_),
+                cancel_notifier: None,
+            } => write!(fmt, "Pending {{ waker: Some, cancel_notifier: None }}"),
+            Pending {
+                waker: None,
+                cancel_notifier: None,
+            } => write!(fmt, "Pendnig {{ waker: None, cancel_notifier: None }}"),
+            Cancelled => write!(fmt, "Cancelled"),
+        }
+    }
 }
 
 impl<TRes> Subscription<TRes> {
@@ -247,6 +281,7 @@ impl<TRes> Subscription<TRes> {
             // to be updated
             if is_last {
                 if let Some(mut sender) = cancel_notifier {
+                    trace!("cancelling: {}", kind);
                     let _ = sender.try_send(RepoEvent::try_from(kind).unwrap());
                 }
             }
@@ -273,20 +308,29 @@ impl<TRes: Debug + PartialEq> Future for SubscriptionFuture<TRes> {
     type Output = Result<TRes, Cancelled>;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
+        use tracing_futures::Instrument;
+
+        let span = tracing::trace_span!("polling subscription", id = self.id);
+        let _enter = span.enter();
+
         let mut subscription = {
             // don't hold the lock for too long, otherwise the `Drop` impl for `SubscriptionFuture`
             // can cause a stack overflow
-            let mut subscriptions = task::block_on(async { self.subscriptions.lock().await });
+            let mut subscriptions =
+                task::block_on(async { self.subscriptions.lock().await }.in_current_span());
             if let Some(sub) = subscriptions
                 .get_mut(&self.kind)
                 .and_then(|subs| subs.remove(&self.id))
             {
                 sub
             } else {
+                tracing::trace!("already cancelled");
                 // the subscription must already have been cancelled
                 return Poll::Ready(Err(Cancelled));
             }
         };
+
+        tracing::trace!("state: {:?}", subscription);
 
         match subscription {
             Subscription::Cancelled => Poll::Ready(Err(Cancelled)),
@@ -304,28 +348,43 @@ impl<TRes: Debug + PartialEq> Future for SubscriptionFuture<TRes> {
 
 impl<TRes: Debug + PartialEq> Drop for SubscriptionFuture<TRes> {
     fn drop(&mut self) {
-        debug!("Dropping subscription {} to {}", self.id, self.kind);
+        use tracing_futures::Instrument;
 
-        let (sub, is_last) = task::block_on(async {
-            let mut subscriptions = self.subscriptions.lock().await;
-            let related_subs = if let Some(subs) = subscriptions.get_mut(&self.kind) {
-                subs
-            } else {
-                return (None, false);
-            };
-            let sub = related_subs.remove(&self.id);
-            // check if this is the last subscription to this resource
-            let is_last = related_subs.is_empty();
+        let span = tracing::trace_span!("dropping subscription", id = self.id, kind = %self.kind);
+        let _enter = span.enter();
 
-            (sub, is_last)
-        });
+        let (sub, is_last) = task::block_on(
+            async {
+                let started = std::time::Instant::now();
+                tracing::trace!("obtaining lock");
+                let mut subscriptions = self.subscriptions.lock().in_current_span().await;
+                let elapsed = started.elapsed();
+                tracing::trace!(delay = ?elapsed, "lock obtained");
+
+                let related_subs = if let Some(subs) = subscriptions.get_mut(&self.kind) {
+                    subs
+                } else {
+                    tracing::trace!("kind has been removed?");
+                    return (None, false);
+                };
+                let sub = related_subs.remove(&self.id);
+                // check if this is the last subscription to this resource
+                let is_last = related_subs.is_empty();
+
+                (sub, is_last)
+            }
+            .in_current_span(),
+        );
 
         if let Some(sub) = sub {
+            tracing::trace!("found subscription: {:?}", sub);
             // don't bother updating anything that isn't `Pending`
             if let mut sub @ Subscription::Pending { .. } = sub {
-                debug!("It was the last related subscription, sending a cancel notification");
+                tracing::trace!("sending a cancel notification");
                 sub.cancel(self.kind.clone(), is_last);
             }
+        } else {
+            tracing::trace!("subscription not found");
         }
     }
 }

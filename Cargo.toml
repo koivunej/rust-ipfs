@@ -34,12 +34,14 @@ thiserror = "1.0.14"
 void = "1.0.2"
 ipfs-unixfs = { path = "unixfs" }
 async-stream = "0.2.1"
+tracing = "0.1"
+tracing-futures = { version = "0.2", default-features = false, features = ["std", "futures-03"] }
 
 [build-dependencies]
 prost-build = "0.6.1"
 
 [dev-dependencies]
-env_logger = "0.7.1"
+tracing-subscriber = { version = "0.2", features = ["fmt", "tracing-log"] }
 sha2 = "0.8.1"
 hex-literal = "0.2.1"
 
