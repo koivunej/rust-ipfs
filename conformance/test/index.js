@@ -30,6 +30,7 @@ const options = {
 
 const factory = createFactory(options)
 
+/*
 // Phase 1.0-ish
 //
 tests.miscellaneous(factory, { skip: [
@@ -71,7 +72,7 @@ tests.root.refsLocal(factory);
 
 // Phase 2 and beyond...
 
-tests.root.cat(factory);
+tests.root.cat(factory);*/
 tests.root.get(factory);
 tests.root.add(factory, {
   skip: [
