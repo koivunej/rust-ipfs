@@ -48,9 +48,19 @@ impl fmt::Debug for Leaf {
 }
 
 /// Configuration for customizing how the tree is built.
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct TreeOptions {
+    pub block_size_limit: Option<u64>,
     pub wrap_with_directory: bool,
+}
+
+impl std::default::Default for TreeOptions {
+    fn default() -> Self {
+        TreeOptions {
+            block_size_limit: Some(512 * 1024),
+            wrap_with_directory: false,
+        }
+    }
 }
 
 /// Tree building failure cases.
