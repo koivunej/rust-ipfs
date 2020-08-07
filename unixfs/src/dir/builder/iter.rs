@@ -204,8 +204,7 @@ impl<'a> PostOrderIterator<'a> {
         let mut writer = Writer::new(BytesWriter::new(&mut buffer[..]));
         btreed
             .write_message(&mut writer)
-            //.map_err(TreeConstructionFailed::Protobuf)?;
-            .expect("unsure how this could fail");
+            .map_err(TreeConstructionFailed::Protobuf)?;
 
         buffer.truncate(size);
 

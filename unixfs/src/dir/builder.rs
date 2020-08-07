@@ -125,6 +125,7 @@ enum Visited {
 /// Failure cases for `PostOrderIterator` creating the tree dag-pb nodes.
 #[derive(Debug)]
 pub enum TreeConstructionFailed {
+    Protobuf(quick_protobuf::Error),
     TooLargeBlock(u64),
 }
 
@@ -132,6 +133,7 @@ impl fmt::Display for TreeConstructionFailed {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         use TreeConstructionFailed::*;
         match self {
+            Protobuf(e) => write!(fmt, "serialization failed: {}", e),
             TooLargeBlock(bytes) => write!(fmt, "attempted to create block of {} bytes", bytes),
         }
     }
