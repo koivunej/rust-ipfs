@@ -17,8 +17,7 @@ pub struct PostOrderIterator<'a> {
     pub(super) reused_children: Vec<Visited>,
     pub(super) cid: Option<Cid>,
     pub(super) total_size: u64,
-    // from TreeOptions
-    pub(super) wrap_with_directory: bool,
+    opts: TreeOptions,
 }
 
 impl<'a> PostOrderIterator<'a> {
@@ -39,7 +38,7 @@ impl<'a> PostOrderIterator<'a> {
             reused_children: Vec::new(),
             cid: None,
             total_size: 0,
-            wrap_with_directory: opts.wrap_with_directory,
+            opts,
         }
     }
 
@@ -276,7 +275,7 @@ impl<'a> PostOrderIterator<'a> {
                     // FIXME: leaves could be drained and reused
                     collected.extend(leaves);
 
-                    if !self.wrap_with_directory && parent_id.is_none() {
+                    if !self.opts.wrap_with_directory && parent_id.is_none() {
                         // we aren't supposed to wrap_with_directory, and we are now looking at the
                         // possibly to-be-generated root directory.
 
