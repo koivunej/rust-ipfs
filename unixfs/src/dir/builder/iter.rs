@@ -45,6 +45,7 @@ impl<'a> PostOrderIterator<'a> {
     fn render_directory(
         links: &BTreeMap<String, Leaf>,
         buffer: &mut Vec<u8>,
+        opts: &TreeOptions,
     ) -> Result<Leaf, TreeConstructionFailed> {
         use crate::pb::{UnixFs, UnixFsType};
         use quick_protobuf::{BytesWriter, MessageWrite, Writer, WriterBackend};
@@ -180,6 +181,13 @@ impl<'a> PostOrderIterator<'a> {
 
         let size = btreed.get_size();
 
+        if let Some(limit) = opts.block_size_limit {
+            let size = size as u64;
+            if limit < size {
+                return Err(TreeConstructionFailed::TooLargeBlock(size));
+            }
+        }
+
         // FIXME: we shouldn't be creating too large structures (bitswap block size limit!)
         // FIXME: changing this to autosharding is going to take some thinking
 
@@ -196,6 +204,7 @@ impl<'a> PostOrderIterator<'a> {
         let mut writer = Writer::new(BytesWriter::new(&mut buffer[..]));
         btreed
             .write_message(&mut writer)
+            //.map_err(TreeConstructionFailed::Protobuf)?;
             .expect("unsure how this could fail");
 
         buffer.truncate(size);
@@ -290,7 +299,7 @@ impl<'a> PostOrderIterator<'a> {
 
                     let buffer = &mut self.block_buffer;
 
-                    let leaf = match Self::render_directory(&collected, buffer) {
+                    let leaf = match Self::render_directory(&collected, buffer, &self.opts) {
                         Ok(leaf) => leaf,
                         Err(e) => return Some(Err(e)),
                     };
