@@ -50,15 +50,7 @@ impl fmt::Debug for Leaf {
 /// Configuration for customizing how the tree is built.
 #[derive(Default, Debug, Clone)]
 pub struct TreeOptions {
-    wrap_with_directory: bool,
-}
-
-impl TreeOptions {
-    /// When true, allow multiple top level entries, otherwise error on the second entry.
-    /// Defaults to false.
-    pub fn wrap_with_directory(&mut self) {
-        self.wrap_with_directory = true;
-    }
+    pub wrap_with_directory: bool,
 }
 
 /// Tree building failure cases.

@@ -111,9 +111,7 @@ where
     async_stream::try_stream! {
 
         let mut tree_opts = TreeOptions::default();
-        if opts.wrap_with_directory {
-            tree_opts.wrap_with_directory();
-        }
+        tree_opts.wrap_with_directory = opts.wrap_with_directory;
 
         let mut tree = BufferingTreeBuilder::new(tree_opts);
         let mut buffer = BytesMut::new();

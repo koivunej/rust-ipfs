@@ -291,7 +291,7 @@ mod tests {
             Cid::try_from("QmRJHYTNvC3hmd9gJQARxLR1QMEincccBV53bBw524yyq6").unwrap();
 
         let mut opts = TreeOptions::default();
-        opts.wrap_with_directory();
+        opts.wrap_with_directory = true;
         let mut builder = BufferingTreeBuilder::new(opts);
         builder
             .put_file("a", five_block_foobar.clone(), 221)
@@ -323,7 +323,7 @@ mod tests {
             Cid::try_from("QmRJHYTNvC3hmd9gJQARxLR1QMEincccBV53bBw524yyq6").unwrap();
 
         let mut opts = TreeOptions::default();
-        opts.wrap_with_directory();
+        opts.wrap_with_directory = true;
         let mut builder = BufferingTreeBuilder::new(opts);
         builder.put_file("a", five_block_foobar, 221).unwrap();
 
