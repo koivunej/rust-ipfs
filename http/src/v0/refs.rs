@@ -131,45 +131,51 @@ async fn refs_paths<T: IpfsTypes>(
 > {
     use ipfs::dag::ResolvedNode;
 
-    let dag = ipfs.dag();
-
     // added braces to spell it out for borrowck that dag does not outlive this fn
-    let iplds: Vec<(Cid, Ipld)> = {
+    let iplds = {
         // the assumption is that futuresordered will poll the first N items until the first completes,
         // buffering the others. it might not be 100% parallel but it's probably enough.
         let mut walks = FuturesOrdered::new();
 
         for path in paths {
-            walks.push(dag.resolve(path, true));
+            let dag = ipfs.dag();
+            walks.push(async move {
+                match dag.resolve(path, true).await {
+                    // filter out anything scoped to /Data on a dag-pb node; those cannot contain
+                    // links as all links for a dag-pb are under /Links
+                    Ok((ResolvedNode::DagPbData(_, _), _)) => {
+                        Ok::<Option<(Cid, Ipld)>, ipfs::Error>(None)
+                    }
+                    Ok((ResolvedNode::Link(..), _)) => unreachable!("followed links"),
+                    // decode and hope for the best; this of course does a lot of wasted effort;
+                    // hopefully one day we can do "projectioned decoding", like here we'd only
+                    // need all of the links of the block
+                    Ok((ResolvedNode::Block(b), _)) => match decode_ipld(b.cid(), b.data()) {
+                        Ok(ipld) => Ok(Some((b.cid, ipld))),
+                        Err(e) => Err(ResolveError::UnsupportedDocument(b.cid, e.into()).into()),
+                    },
+                    // the most straight-forward variant with pre-projected document
+                    Ok((ResolvedNode::Projection(cid, ipld), _)) => Ok(Some((cid, ipld))),
+                    Err(e) => Err(e.into()),
+                }
+            });
         }
 
         walks
             // strip out the path inside last document, we don't need it
-            .try_filter_map(|(resolved, _)| {
-                ready(match resolved {
-                    // filter out anything scoped to /Data on a dag-pb node; those cannot contain
-                    // links as all links for a dag-pb are under /Links
-                    ResolvedNode::DagPbData(_, _) => Ok(None),
-                    ResolvedNode::Link(..) => unreachable!("followed links"),
-                    // decode and hope for the best; this of course does a lot of wasted effort;
-                    // hopefully one day we can do "projectioned decoding", like here we'd only
-                    // need all of the links of the block
-                    ResolvedNode::Block(b) => match decode_ipld(b.cid(), b.data()) {
-                        Ok(ipld) => Ok(Some((b.cid, ipld))),
-                        Err(e) => Err(ResolveError::UnsupportedDocument(b.cid, e.into())),
-                    },
-                    // the most straight-forward variant with pre-projected document
-                    ResolvedNode::Projection(cid, ipld) => Ok(Some((cid, ipld))),
-                })
-            })
-            // TODO: collecting here is actually a quite unnecessary, if only we could make this into a
-            // stream.. however there may have been the case that all paths need to resolve before
-            // http status code is determined so perhaps this is the only way.
-            .try_collect()
-            .await?
+            .try_filter_map(|maybe_tuple| ready(Ok(maybe_tuple)))
+            .collect::<Vec<_>>()
+            .await
+        // we need to collect here, as we need to resolve the paths
+        // before sending the response headers
     };
 
-    Ok(ipfs::refs::iplds_refs(ipfs, iplds, max_depth, unique))
+    Ok(ipfs::refs::iplds_refs(
+        ipfs,
+        futures::stream::iter(iplds),
+        max_depth,
+        unique,
+    ))
 }
 
 /// Handling of https://docs-beta.ipfs.io/reference/http/api/#api-v0-refs-local

@@ -15,7 +15,7 @@ use either::Either;
 use futures::channel::mpsc::{channel, Receiver, Sender};
 use futures::channel::oneshot::{channel as oneshot_channel, Sender as OneshotSender};
 use futures::sink::SinkExt;
-use futures::stream::{Fuse, Stream};
+use futures::stream::{Fuse, Stream, TryStream};
 pub use libp2p::core::{
     connection::ListenerId, multiaddr::Protocol, ConnectedPoint, Multiaddr, PeerId, PublicKey,
 };
@@ -836,20 +836,23 @@ impl<Types: IpfsTypes> Ipfs<Types> {
         }
     }
 
-    /// Walk the given Iplds' links up to `max_depth` (or indefinitely for `None`). Will return
-    /// any duplicate trees unless `unique` is `true`.
+    /// Walk the given Ipld documents at paths for links up until `max_depth` (or infinite, when
+    /// `None`). Will return any duplicate trees unless `unique` is `true`. Single paths can be
+    /// converted to streams through [`std::iter::once`] and [`futures::stream::iter`] or through
+    /// [`futures::future::ready`] and [`futures::stream::once`].
     ///
-    /// More information and a `'static` lifetime version available at [`refs::iplds_refs`].
-    pub fn refs<'a, Iter>(
+    /// More information and `'static` lifetime version available at [`crate::refs`] module.
+    pub fn refs<'a, St, E>(
         &'a self,
-        iplds: Iter,
+        paths: St,
         max_depth: Option<u64>,
         unique: bool,
-    ) -> impl Stream<Item = Result<refs::Edge, ipld::BlockError>> + Send + 'a
+    ) -> impl Stream<Item = Result<refs::Edge, E>> + Send + 'a
     where
-        Iter: IntoIterator<Item = (Cid, Ipld)> + 'a,
+        St: TryStream<Ok = IpfsPath, Error = E> + Send + 'a,
+        E: From<dag::ResolveError> + From<refs::RefsError> + Send + Unpin + 'static,
     {
-        refs::iplds_refs(self, iplds, max_depth, unique)
+        refs::refs(self, paths, max_depth, unique)
     }
 
     /// Exit daemon.

@@ -1,8 +1,8 @@
 use crate::ipld::{decode_ipld, Ipld};
-use crate::{Block, Ipfs, IpfsTypes};
+use crate::{Block, Ipfs, IpfsPath, IpfsTypes};
 use async_stream::stream;
 use cid::{self, Cid};
-use futures::stream::Stream;
+use futures::stream::{Stream, TryStream, TryStreamExt};
 use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -29,6 +29,62 @@ impl fmt::Debug for Edge {
     }
 }
 
+/// Errors which can happen while during refs gathering.
+#[derive(Debug, thiserror::Error)]
+pub enum RefsError {
+    #[error("block loading failed")]
+    Loading(#[from] crate::Error),
+
+    #[error("failed to parse block as Ipld")]
+    Parsing(#[from] crate::ipld::BlockError),
+}
+
+/// Adapts a stream of `IpfsPath` to a stream of refs.
+pub fn refs<'a, Types, MaybeOwned, St, E>(
+    ipfs: MaybeOwned,
+    paths: St,
+    max_depth: Option<u64>,
+    unique: bool,
+) -> impl Stream<Item = Result<Edge, E>> + Send + 'a
+where
+    Types: IpfsTypes,
+    MaybeOwned: Borrow<Ipfs<Types>> + Send + 'a,
+    St: TryStream<Ok = IpfsPath, Error = E> + Send + 'a,
+    E: From<crate::dag::ResolveError> + From<RefsError> + Send + Unpin + 'static,
+{
+    use crate::dag::ResolvedNode;
+
+    let borrowed = ipfs.borrow();
+    let dag = borrowed.dag();
+    let st = paths.try_filter_map(move |path| {
+        let dag = dag.clone();
+        async move {
+            match dag.resolve(path, true).await {
+                Ok((ResolvedNode::DagPbData(_, _), _)) => {
+                    // dag-pb::Data cannot have links
+                    Ok::<Option<(Cid, Ipld)>, E>(None)
+                }
+                Ok((ResolvedNode::Link(..), _)) => unreachable!("followed links"),
+
+                // decode and hope for the best; this of course does a lot of wasted effort;
+                // hopefully one day we can do "projectioned decoding", like here we'd only
+                // need all of the links of the block
+                Ok((ResolvedNode::Block(b), _)) => match decode_ipld(b.cid(), b.data()) {
+                    Ok(ipld) => Ok(Some((b.cid, ipld))),
+                    Err(e) => Err(E::from(RefsError::Parsing(e))),
+                },
+
+                // the most straight-forward variant with pre-projected document
+                Ok((ResolvedNode::Projection(cid, ipld), _)) => Ok(Some((cid, ipld))),
+
+                Err(e) => Err(E::from(e)),
+            }
+        }
+    });
+
+    iplds_refs(ipfs, st, max_depth, unique)
+}
+
 /// Gather links as edges between two documents from all of the `iplds` which represent the
 /// document and it's original `Cid`, as the `Ipld` can be a subtree of the document.
 ///
@@ -46,93 +102,103 @@ impl fmt::Debug for Edge {
 ///
 /// Depending on how this function is called, the lifetime will be tied to the lifetime of given
 /// `&Ipfs` or `'static` when given ownership of `Ipfs`.
-pub fn iplds_refs<'a, Types, MaybeOwned, Iter>(
+pub fn iplds_refs<'a, Types, MaybeOwned, St, E>(
     ipfs: MaybeOwned,
-    iplds: Iter,
+    iplds: St,
     max_depth: Option<u64>,
     unique: bool,
-) -> impl Stream<Item = Result<Edge, crate::ipld::BlockError>> + Send + 'a
+) -> impl Stream<Item = Result<Edge, E>> + Send + 'a
 where
     Types: IpfsTypes,
     MaybeOwned: Borrow<Ipfs<Types>> + Send + 'a,
-    Iter: IntoIterator<Item = (Cid, Ipld)>,
+    St: TryStream<Ok = (Cid, Ipld), Error = E> + Send + 'a,
+    E: From<RefsError> + Send + Unpin + 'static,
 {
     let mut work = VecDeque::new();
     let mut queued_or_visited = HashSet::new();
 
-    let empty_stream = max_depth.map(|n| n == 0).unwrap_or(false);
-
-    // double check the max_depth before filling the work and queued_or_visited up just in case we
-    // are going to be returning an empty stream
-    if !empty_stream {
-        // not building these before moving the work and hashset into the stream would impose
-        // apparently impossible bounds on `Iter`, in addition to `Send + 'a`.
-        for (origin, ipld) in iplds {
-            for (link_name, next_cid) in ipld_links(&origin, ipld) {
-                if unique && !queued_or_visited.insert(next_cid.clone()) {
-                    trace!("skipping already queued {}", next_cid);
-                    continue;
-                }
-                work.push_back((0, next_cid, origin.clone(), link_name));
-            }
-        }
-    }
-
     stream! {
-        if empty_stream {
+        if let Some(0) = max_depth {
             return;
         }
 
-        while let Some((depth, cid, source, link_name)) = work.pop_front() {
-            let traverse_links = match max_depth {
-                Some(d) if d <= depth => {
-                    // important to continue instead of stopping
-                    continue;
-                },
-                // no need to list links which would be filtered out
-                Some(d) if d + 1 == depth => false,
-                _ => true
-            };
+        // TryStream is not implemented for Pin<&mut T> where T: TryStream so we need to use it as
+        // a Stream to make it Unpin for TryStream usage.
+        let iplds = iplds.into_stream();
+        futures::pin_mut!(iplds);
 
-            // if this is not bound to a local variable it'll introduce a Sync requirement on
-            // `MaybeOwned` which we don't necessarily need.
-            let borrowed = ipfs.borrow();
+        loop {
 
-            let data = match borrowed.get_block(&cid).await {
-                Ok(Block { data, .. }) => data,
-                Err(e) => {
-                    warn!("failed to load {}, linked from {}: {}", cid, source, e);
-                    // TODO: yield error msg
-                    // unsure in which cases this happens, because we'll start to search the content
-                    // and stop only when request has been cancelled (FIXME: no way to stop this
-                    // operation)
-                    continue;
-                }
-            };
-
-            let ipld = match decode_ipld(&cid, &data) {
-                Ok(ipld) => ipld,
-                Err(e) => {
-                    warn!("failed to parse {}, linked from {}: {}", cid, source, e);
-                    // go-ipfs on raw Qm hash:
-                    // > failed to decode Protocol Buffers: incorrectly formatted merkledag node: unmarshal failed. proto: illegal wireType 6
-                    yield Err(e);
-                    continue;
-                }
-            };
-
-            if traverse_links {
-                for (link_name, next_cid) in ipld_links(&cid, ipld) {
-                    if unique && !queued_or_visited.insert(next_cid.clone()) {
-                        trace!("skipping already queued {}", next_cid);
-                        continue;
-                    }
-
-                    work.push_back((depth + 1, next_cid, cid.clone(), link_name));
+            while work.is_empty() {
+                match iplds.try_next().await {
+                    Ok(Some((origin, ipld))) => {
+                        for (link_name, next_cid) in ipld_links(&origin, ipld) {
+                            if unique && !queued_or_visited.insert(next_cid.clone()) {
+                                trace!("skipping already queued {}", next_cid);
+                                continue;
+                            }
+                            work.push_back((0, next_cid, origin.clone(), link_name));
+                        }
+                    },
+                    Ok(None) => { return; },
+                    Err(e) => { yield Err(e.into()); },
                 }
             }
 
-            yield Ok(Edge { source, destination: cid, name: link_name });
+            while let Some((depth, cid, source, link_name)) = work.pop_front() {
+                let traverse_links = match max_depth {
+                    Some(d) if d <= depth => {
+                        // important to continue instead of stopping
+                        continue;
+                    },
+                    // no need to list links which would be filtered out
+                    Some(d) if d + 1 == depth => false,
+                    _ => true
+                };
+
+                // if this is not bound to a local variable it'll introduce a Sync requirement on
+                // `MaybeOwned` which we don't necessarily need.
+                let borrowed = ipfs.borrow();
+
+                let data = match borrowed.get_block(&cid).await {
+                    Ok(Block { data, .. }) => data,
+                    Err(e) => {
+                        warn!("failed to load {}, linked from {}: {}", cid, source, e);
+                        // TODO: yield error msg
+                        // unsure in which cases this happens, because we'll start to search the content
+                        // and stop only when request has been cancelled (FIXME: no way to stop this
+                        // operation)
+                        continue;
+                    }
+                };
+
+                // TODO: Instead of doing a full IPLD decoding, it might be good to investigate if
+                // we could just do "directed parsing" or in the case of dag-pb, "just parse the Cids"
+
+                let ipld = match decode_ipld(&cid, &data) {
+                    Ok(ipld) => ipld,
+                    Err(e) => {
+                        warn!("failed to parse {}, linked from {}: {}", cid, source, e);
+                        // go-ipfs on raw Qm hash:
+                        // > failed to decode Protocol Buffers: incorrectly formatted merkledag node: unmarshal failed. proto: illegal wireType 6
+                        yield Err(RefsError::from(e).into());
+                        continue;
+                    }
+                };
+
+                if traverse_links {
+                    for (link_name, next_cid) in ipld_links(&cid, ipld) {
+                        if unique && !queued_or_visited.insert(next_cid.clone()) {
+                            trace!("skipping already queued {}", next_cid);
+                            continue;
+                        }
+
+                        work.push_back((depth + 1, next_cid, cid.clone(), link_name));
+                    }
+                }
+
+                yield Ok(Edge { source, destination: cid, name: link_name });
+            }
         }
     }
 }
@@ -274,17 +340,22 @@ mod tests {
         let root_block = ipfs.get_block(&Cid::try_from(root).unwrap()).await.unwrap();
         let ipld = decode_ipld(root_block.cid(), root_block.data()).unwrap();
 
-        let all_edges: Vec<_> = iplds_refs(ipfs, vec![(root_block.cid, ipld)], None, false)
-            .map_ok(
-                |Edge {
-                     source,
-                     destination,
-                     ..
-                 }| (source.to_string(), destination.to_string()),
-            )
-            .try_collect()
-            .await
-            .unwrap();
+        let all_edges: Vec<_> = iplds_refs(
+            ipfs,
+            futures::stream::iter(vec![Ok::<_, crate::Error>((root_block.cid, ipld))]),
+            None,
+            false,
+        )
+        .map_ok(
+            |Edge {
+                 source,
+                 destination,
+                 ..
+             }| (source.to_string(), destination.to_string()),
+        )
+        .try_collect()
+        .await
+        .unwrap();
 
         // not sure why go-ipfs outputs this order, this is more like dfs?
         let expected = [
@@ -321,11 +392,16 @@ mod tests {
         let root_block = ipfs.get_block(&Cid::try_from(root).unwrap()).await.unwrap();
         let ipld = decode_ipld(root_block.cid(), root_block.data()).unwrap();
 
-        let destinations: HashSet<_> = iplds_refs(ipfs, vec![(root_block.cid, ipld)], None, true)
-            .map_ok(|Edge { destination, .. }| destination.to_string())
-            .try_collect()
-            .await
-            .unwrap();
+        let destinations: HashSet<_> = iplds_refs(
+            ipfs,
+            futures::stream::iter(vec![Ok::<_, crate::Error>((root_block.cid, ipld))]),
+            None,
+            true,
+        )
+        .map_ok(|Edge { destination, .. }| destination.to_string())
+        .try_collect()
+        .await
+        .unwrap();
 
         // go-ipfs output:
         // bafyreihpc3vupfos5yqnlakgpjxtyx3smkg26ft7e2jnqf3qkyhromhb64 -> bafyreidquig3arts3bmee53rutt463hdyu6ff4zeas2etf2h2oh4dfms44
