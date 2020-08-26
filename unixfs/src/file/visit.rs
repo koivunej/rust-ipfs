@@ -137,7 +137,7 @@ impl FileVisit {
     ///
     /// Returns tuple of the next Cid which needs to be processed and an iterator over the
     /// remaining.
-    pub fn pending_links(&self) -> (&Cid, impl Iterator<Item = &Cid>) {
+    pub fn pending_links(&self) -> (&Cid, impl DoubleEndedIterator<Item = &Cid>) {
         let mut iter = self.pending.iter().rev().map(|(link, _)| link);
         let first = iter
             .next()
