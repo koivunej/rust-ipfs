@@ -65,6 +65,47 @@ where
         }
     };
 
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let jh = tokio::spawn({
+        use crate::IpfsPath;
+        use futures::stream::{StreamExt, TryStreamExt};
+        let ipfs = ipfs.borrow().to_owned();
+        async move {
+            rx.for_each_concurrent(2, |cid| {
+                let ipfs = ipfs.clone();
+                async move {
+                    crate::refs::refs(
+                        ipfs,
+                        futures::stream::once(futures::future::ready(Ok::<_, crate::Error>(
+                            IpfsPath::from(cid),
+                        ))),
+                        None,
+                        true,
+                    )
+                    .try_fold(0usize, |count, _| futures::future::ready(Ok(count + 1)))
+                    .await
+                    .unwrap();
+                }
+            })
+            .await;
+
+            /*let prefetched: Result<usize, _> = crate::refs::refs(
+                ipfs,
+                rx.map(|cid: Cid| Ok::<_, crate::Error>(IpfsPath::from(cid))),
+                None,
+                true,
+            )
+            .try_fold(0usize, |count, _| futures::future::ready(Ok(count + 1)))
+            .await;
+
+            match prefetched {
+                Ok(count) => info!("prefetched {} blocks", count),
+                Err(e) => info!("prefetching stopped on {}", e),
+            }*/
+        }
+    });
+
     // FIXME: we could use the above file_size to set the content-length ... but calculating it
     // with the ranges is not ... trivial?
 
@@ -72,50 +113,83 @@ where
     // but this might be easy enough to write open.
     Ok(stream! {
 
-        if let Some(bytes) = bytes {
-            yield Ok(bytes);
-        }
+        {
+            if let Some(bytes) = bytes {
+                yield Ok(bytes);
+            }
 
-        let mut visit = match visit {
-            Some(visit) => visit,
-            None => return,
-        };
-
-        loop {
-            // TODO: if it was possible, it would make sense to start downloading N of these
-            // we could just create an FuturesUnordered which would drop the value right away. that
-            // would probably always cost many unnecessary clones, but it would be nice to "shut"
-            // the subscriber so that it will only resolve to a value but still keep the operation
-            // going. Not that we have any "operation" concept of the Want yet.
-            let (next, _) = visit.pending_links();
-
-            let borrow = ipfs.borrow();
-            let Block { cid, data } = match borrow.get_block(&next).await {
-                Ok(block) => block,
-                Err(e) => {
-                    yield Err(TraversalFailed::Loading(next.to_owned(), e));
-                    return;
-                },
+            let mut visit = match visit {
+                Some(visit) => visit,
+                None => return,
             };
 
-            match visit.continue_walk(&data, &mut cache) {
-                Ok((bytes, next_visit)) => {
-                    if !bytes.is_empty() {
-                        // TODO: manual implementation could allow returning just the slice
-                        yield Ok(bytes.to_vec());
+            let mut prefetch = true;
+            let mut last_pending = None;
+
+            loop {
+                // TODO: if it was possible, it would make sense to start downloading N of these
+                // we could just create an FuturesUnordered which would drop the value right away. that
+                // would probably always cost many unnecessary clones, but it would be nice to "shut"
+                // the subscriber so that it will only resolve to a value but still keep the operation
+                // going. Not that we have any "operation" concept of the Want yet.
+                let next = {
+                    let (next, links) = visit.pending_links();
+
+                    if prefetch {
+                        let pending = links.skip(last_pending.unwrap_or(0)).map(|cid| cid.to_owned());
+
+                        let mut count = 0;
+
+                        for cid in pending {
+                            eprintln!("prefetching {}", cid);
+                            if tx.send(cid).is_ok() {
+                                count += 1;
+                                prefetch = false;
+                            }
+                        }
+
+                        if count == 0 && last_pending.unwrap_or(0) > 0 {
+                            // the pending are starting to contract, we can stop prefetching more
+                            prefetch = false;
+                        }
+
+                        last_pending = Some(last_pending.unwrap_or(0) + count);
                     }
 
-                    match next_visit {
-                        Some(v) => visit = v,
-                        None => return,
+                    next
+                };
+
+                let borrow = ipfs.borrow();
+                let Block { cid, data } = match borrow.get_block(&next).await {
+                    Ok(block) => block,
+                    Err(e) => {
+                        yield Err(TraversalFailed::Loading(next.to_owned(), e));
+                        break;
+                    },
+                };
+
+                match visit.continue_walk(&data, &mut cache) {
+                    Ok((bytes, next_visit)) => {
+                        if !bytes.is_empty() {
+                            // TODO: manual implementation could allow returning just the slice
+                            yield Ok(bytes.to_vec());
+                        }
+
+                        match next_visit {
+                            Some(v) => visit = v,
+                            None => break,
+                        }
                     }
-                }
-                Err(e) => {
-                    yield Err(TraversalFailed::Walking(cid, e));
-                    return;
+                    Err(e) => {
+                        yield Err(TraversalFailed::Walking(cid, e));
+                        break;
+                    }
                 }
             }
         }
+
+        drop(tx);
+        jh.await.unwrap();
     })
 }
 
