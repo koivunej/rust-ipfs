@@ -150,9 +150,17 @@ impl RawResolveLocalError {
 }
 
 /// `ipfs.dag` interface providing wrapper around Ipfs.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct IpldDag<Types: RepoTypes> {
     ipfs: Ipfs<Types>,
+}
+
+impl<Types: RepoTypes> Clone for IpldDag<Types> {
+    fn clone(&self) -> Self {
+        IpldDag {
+            ipfs: self.ipfs.clone(),
+        }
+    }
 }
 
 impl<Types: RepoTypes> IpldDag<Types> {
