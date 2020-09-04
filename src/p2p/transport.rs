@@ -24,7 +24,8 @@ pub fn build_transport(keypair: identity::Keypair) -> io::Result<TTransport> {
         .unwrap();
     let noise_config = NoiseConfig::xx(xx_keypair).into_authenticated();
 
-    Ok(DnsConfig::new(TokioTcpConfig::new().nodelay(true))?
+    Ok(/*DnsConfig::new(*/ TokioTcpConfig::new()
+        .nodelay(true) //)?
         .upgrade(Version::V1)
         .authenticate(noise_config)
         .multiplex(SelectUpgrade::new(
